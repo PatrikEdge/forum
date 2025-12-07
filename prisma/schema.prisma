@@ -1,0 +1,106 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  email     String   @unique
+  password  String
+  avatarUrl String?
+  role      Role     @default(USER)
+  joinedAt  DateTime @default(now())
+
+  threads     Thread[]
+  posts       Post[]
+  likes       Like[]
+  chatMessages ChatMessage[]
+  notifications Notification[]
+  dmSent      DMMessage[] @relation("DMFrom")
+  dmReceived  DMMessage[] @relation("DMTo")
+}
+
+enum Role {
+  USER
+  MODERATOR
+  ADMIN
+}
+
+model Category {
+  id      String   @id @default(cuid())
+  name    String
+  threads Thread[]
+}
+
+model Thread {
+  id          String   @id @default(cuid())
+  title       String
+  excerpt     String
+  authorId    String
+  author      User     @relation(fields: [authorId], references: [id])
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id])
+  lastActive  DateTime @default(now())
+  isPinned    Boolean  @default(false)
+
+  posts       Post[]
+}
+
+model Post {
+  id        String   @id @default(cuid())
+  text      String
+  createdAt DateTime @default(now())
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  threadId  String
+  thread    Thread   @relation(fields: [threadId], references: [id])
+
+  likes     Like[]
+}
+
+model Like {
+  id        String   @id @default(cuid())
+  userId    String
+  postId    String
+
+  user      User @relation(fields: [userId], references: [id])
+  post      Post @relation(fields: [postId], references: [id])
+
+  @@unique([userId, postId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  type      String
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  text      String
+  createdAt DateTime @default(now())
+  senderId  String
+  sender    User     @relation(fields: [senderId], references: [id])
+}
+
+model DMMessage {
+  id        String   @id @default(cuid())
+  text      String
+  createdAt DateTime @default(now())
+  read      Boolean  @default(false)
+  fromId    String
+  toId      String
+
+  from      User @relation("DMFrom", fields: [fromId], references: [id])
+  to        User @relation("DMTo", fields: [toId], references: [id])
+}
