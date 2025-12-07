@@ -12,7 +12,7 @@ export async function GET(req: NextRequest, { params }: Params) {
 
   const otherId = params.userId;
 
-  const messages = await prisma.dmMessage.findMany({
+  const messages = await prisma.dMMessage.findMany({
     where: {
       OR: [
         { fromId: user.id, toId: otherId },
@@ -22,5 +22,49 @@ export async function GET(req: NextRequest, { params }: Params) {
     orderBy: { createdAt: "asc" },
   });
 
+  // Jelöld olvasottá a bejövő üzeneteket
+  await prisma.dMMessage.updateMany({
+    where: {
+      fromId: otherId,
+      toId: user.id,
+      read: false,
+    },
+    data: { read: true },
+  });
+
   return NextResponse.json({ messages });
+}
+
+export async function DELETE(req: NextRequest, { params }: Params) {
+  const user = await getUserFromRequest(req);
+  if (!user) {
+    return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+  }
+
+  const messageId = params.id;
+
+  // Üzenet megkeresése
+  const message = await prisma.chatMessage.findUnique({
+    where: { id: messageId },
+  });
+
+  if (!message) {
+    return NextResponse.json({ error: "Üzenet nem található" }, { status: 404 });
+  }
+
+  // Jogosultság ellenőrzés
+  const canDelete =
+    message.authorId === user.id ||
+    user.role === "MODERATOR" ||
+    user.role === "ADMIN";
+
+  if (!canDelete) {
+    return NextResponse.json({ error: "Nincs jogosultságod törölni" }, { status: 403 });
+  }
+
+  await prisma.chatMessage.delete({
+    where: { id: messageId },
+  });
+
+  return NextResponse.json({ success: true });
 }

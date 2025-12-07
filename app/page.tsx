@@ -3,27 +3,29 @@
 import { useEffect, useState } from "react";
 import { Home, User, MessageCircle, Bell, Mail, Search, ThumbsUp, Send, X, Pin, Trash2 } from "lucide-react";
 
-// Mock user provider (replace with your actual provider)
 const useUser = () => {
-  const [user, setUser] = useState({
-    id: "user1",
-    username: "TestUser",
-    email: "test@example.com",
-    role: "USER",
-    avatarUrl: null
-  });
-  
-  return {
-    user,
-    loading: false,
-    refreshUser: async () => {
-      // Refresh user data from API
-      const res = await fetch("/api/user/me");
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  const refreshUser = async () => {
+    try {
+      const res = await fetch("/api/auth/me");
       if (res.ok) {
         setUser(await res.json());
+      } else {
+        setUser(null); // nincs bejelentkezve
       }
+    } catch {
+      setUser(null);
     }
+    setLoading(false);
   };
+
+  useEffect(() => {
+    refreshUser();
+  }, []);
+
+  return { user, loading, refreshUser };
 };
 
 // ------------------------- Sidebar -------------------------

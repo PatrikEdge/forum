@@ -7,6 +7,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  USER
+  MODERATOR
+  ADMIN
+}
+
 model User {
   id        String   @id @default(cuid())
   username  String   @unique
@@ -15,92 +21,125 @@ model User {
   avatarUrl String?
   role      Role     @default(USER)
   joinedAt  DateTime @default(now())
-
-  threads     Thread[]
-  posts       Post[]
-  likes       Like[]
-  chatMessages ChatMessage[]
+  
+  // Relations
+  threads       Thread[]
+  posts         Post[]
+  likes         Like[]
+  chatMessages  ChatMessage[]
   notifications Notification[]
-  dmSent      DMMessage[] @relation("DMFrom")
-  dmReceived  DMMessage[] @relation("DMTo")
-}
+  dmSent        DMMessage[]      @relation("DMFrom")
+  dmReceived    DMMessage[]      @relation("DMTo")
 
-enum Role {
-  USER
-  MODERATOR
-  ADMIN
+  @@index([email])
+  @@index([username])
 }
 
 model Category {
   id      String   @id @default(cuid())
-  name    String
+  name    String   @unique
   threads Thread[]
+
+  @@index([name])
 }
 
 model Thread {
   id          String   @id @default(cuid())
   title       String
   excerpt     String
-  authorId    String
-  author      User     @relation(fields: [authorId], references: [id])
-  categoryId  String
-  category    Category @relation(fields: [categoryId], references: [id])
-  lastActive  DateTime @default(now())
   isPinned    Boolean  @default(false)
-
+  isLocked    Boolean  @default(false)
+  lastActive  DateTime @default(now())
+  createdAt   DateTime @default(now())
+  authorId    String
+  categoryId  String
+  
+  // Relations
+  author      User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   posts       Post[]
+
+  @@index([authorId])
+  @@index([categoryId])
+  @@index([createdAt])
+  @@index([lastActive])
 }
 
 model Post {
   id        String   @id @default(cuid())
-  text      String
+  text      String   @db.Text
   createdAt DateTime @default(now())
   authorId  String
-  author    User     @relation(fields: [authorId], references: [id])
   threadId  String
-  thread    Thread   @relation(fields: [threadId], references: [id])
-
+  
+  // Relations
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
   likes     Like[]
+
+  @@index([authorId])
+  @@index([threadId])
+  @@index([createdAt])
 }
 
 model Like {
   id        String   @id @default(cuid())
   userId    String
   postId    String
-
-  user      User @relation(fields: [userId], references: [id])
-  post      Post @relation(fields: [postId], references: [id])
-
-  @@unique([userId, postId])
-}
-
-model Notification {
-  id        String   @id @default(cuid())
-  type      String
-  title     String
-  message   String
-  read      Boolean  @default(false)
   createdAt DateTime @default(now())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  
+  // Relations
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post      Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, postId])
+  @@index([userId])
+  @@index([postId])
 }
 
 model ChatMessage {
   id        String   @id @default(cuid())
-  text      String
+  text      String   @db.Text
   createdAt DateTime @default(now())
-  senderId  String
-  sender    User     @relation(fields: [senderId], references: [id])
+  authorId  String
+  
+  // Relations
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([authorId])
+  @@index([createdAt])
 }
 
 model DMMessage {
   id        String   @id @default(cuid())
-  text      String
-  createdAt DateTime @default(now())
+  text      String   @db.Text
   read      Boolean  @default(false)
+  createdAt DateTime @default(now())
   fromId    String
   toId      String
+  
+  // Relations
+  from      User @relation("DMFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to        User @relation("DMTo", fields: [toId], references: [id], onDelete: Cascade)
 
-  from      User @relation("DMFrom", fields: [fromId], references: [id])
-  to        User @relation("DMTo", fields: [toId], references: [id])
+  @@index([fromId])
+  @@index([toId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  type      String   @default("INFO")
+  title     String
+  message   String   @db.Text
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  userId    String
+  
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
 }

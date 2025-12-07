@@ -7,8 +7,8 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
 
   await prisma.notification.updateMany({
-    where: { userId: user.id, read: false },
-    data: { read: true },
+    where: { userId: user.id, isRead: false },
+    data: { isRead: true },
   });
 
   return NextResponse.json({ success: true });

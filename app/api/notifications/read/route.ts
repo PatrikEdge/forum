@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
 
   await prisma.notification.updateMany({
     where: { id, userId: user.id },
-    data: { read: true },
+    data: { isRead: true },
   });
 
   return NextResponse.json({ success: true });

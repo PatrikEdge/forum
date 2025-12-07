@@ -1,10 +1,15 @@
+// app/api/chat/messages/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
 
 export async function GET() {
   const messages = await prisma.chatMessage.findMany({
-    include: { sender: { select: { id: true, username: true, avatarUrl: true, role: true } } },
+    include: { 
+      author: { 
+        select: { id: true, username: true, avatarUrl: true, role: true } 
+      } 
+    },
     orderBy: { createdAt: "asc" },
     take: 200,
   });
@@ -21,9 +26,13 @@ export async function POST(req: NextRequest) {
   const msg = await prisma.chatMessage.create({
     data: {
       text,
-      senderId: user.id,
+      authorId: user.id,
     },
-    include: { sender: { select: { id: true, username: true, avatarUrl: true, role: true } } },
+    include: { 
+      author: { 
+        select: { id: true, username: true, avatarUrl: true, role: true } 
+      } 
+    },
   });
 
   return NextResponse.json({ message: msg });

@@ -1,0 +1,560 @@
+=== app/api/posts/like/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+
+export async function POST(req: NextRequest) {
+  const user = await getUserFromRequest(req);
+  if (!user) return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+
+  const { postId } = await req.json();
+  if (!postId) return NextResponse.json({ error: "postId szükséges" }, { status: 400 });
+
+  const existing = await prisma.like.findUnique({
+    where: {
+      userId_postId: {
+        userId: user.id,
+        postId,
+      },
+    },
+  });
+
+  if (existing) {
+    await prisma.like.delete({ where: { id: existing.id } });
+    return NextResponse.json({ liked: false });
+  } else {
+    await prisma.like.create({
+      data: {
+        userId: user.id,
+        postId,
+      },
+    });
+    return NextResponse.json({ liked: true });
+  }
+}
+=== app/api/posts/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+
+export async function GET(req: NextRequest) {
+  const threadId = req.nextUrl.searchParams.get("threadId");
+  if (!threadId) {
+    return NextResponse.json({ error: "threadId szükséges" }, { status: 400 });
+  }
+
+  const posts = await prisma.post.findMany({
+    where: { threadId },
+    include: {
+      author: { select: { id: true, username: true, avatarUrl: true, role: true } },
+      likes: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  return NextResponse.json({ posts });
+}
+
+export async function POST(req: NextRequest) {
+  const user = await getUserFromRequest(req);
+  if (!user) return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+
+  const { threadId, text } = await req.json();
+  if (!threadId || !text) {
+    return NextResponse.json({ error: "Hiányzó mezők" }, { status: 400 });
+  }
+
+  const post = await prisma.post.create({
+    data: {
+      threadId,
+      text,
+      authorId: user.id,
+    },
+  });
+
+  await prisma.thread.update({
+    where: { id: threadId },
+    data: { lastActive: new Date() },
+  });
+
+  return NextResponse.json({ post });
+}
+=== app/api/chat/messages/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+
+export async function GET() {
+  const messages = await prisma.chatMessage.findMany({
+    include: { sender: { select: { id: true, username: true, avatarUrl: true, role: true } } },
+    orderBy: { createdAt: "asc" },
+    take: 200,
+  });
+  return NextResponse.json({ messages });
+}
+
+export async function POST(req: NextRequest) {
+  const user = await getUserFromRequest(req);
+  if (!user) return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+
+  const { text } = await req.json();
+  if (!text) return NextResponse.json({ error: "Hiányzó mezők" }, { status: 400 });
+
+  const msg = await prisma.chatMessage.create({
+    data: {
+      text,
+      senderId: user.id,
+    },
+    include: { sender: { select: { id: true, username: true, avatarUrl: true, role: true } } },
+  });
+
+  return NextResponse.json({ message: msg });
+}
+=== app/api/auth/register/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { hashPassword, generateToken } from "@/lib/auth";
+
+export async function POST(req: NextRequest) {
+  try {
+    const { username, email, password } = await req.json();
+
+    if (!username || !email || !password) {
+      return NextResponse.json({ error: "Hiányzó mezők" }, { status: 400 });
+    }
+
+    const existing = await prisma.user.findFirst({
+      where: { OR: [{ email }, { username }] },
+    });
+    if (existing) {
+      return NextResponse.json({ error: "A felhasználó már létezik" }, { status: 400 });
+    }
+
+    const user = await prisma.user.create({
+      data: {
+        username,
+        email,
+        password: hashPassword(password),
+      },
+    });
+
+    const token = generateToken({ id: user.id });
+
+    const res = NextResponse.json({ user: { id: user.id, username: user.username, email: user.email } });
+    res.cookies.set("token", token, {
+      httpOnly: true,
+      sameSite: "strict",
+      path: "/",
+    });
+    return res;
+  } catch (e) {
+    console.error(e);
+    return NextResponse.json({ error: "Szerver hiba" }, { status: 500 });
+  }
+}
+=== app/api/auth/me/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { getUserFromRequest } from "@/lib/getUser";
+
+export async function GET(req: NextRequest) {
+  const user = await getUserFromRequest(req);
+  if (!user) return NextResponse.json({ user: null });
+  return NextResponse.json({
+    user: {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      avatarUrl: user.avatarUrl,
+      role: user.role,
+      joinedAt: user.joinedAt,
+    },
+  });
+}
+=== app/api/auth/login/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { verifyPassword, generateToken } from "@/lib/auth";
+
+export async function POST(req: NextRequest) {
+  try {
+    const { email, password } = await req.json();
+    if (!email || !password) {
+      return NextResponse.json({ error: "Hiányzó mezők" }, { status: 400 });
+    }
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user || !verifyPassword(password, user.password)) {
+      return NextResponse.json({ error: "Hibás belépési adatok" }, { status: 401 });
+    }
+
+    const token = generateToken({ id: user.id });
+    const res = NextResponse.json({
+      user: { id: user.id, username: user.username, email: user.email },
+    });
+    res.cookies.set("token", token, {
+      httpOnly: true,
+      sameSite: "strict",
+      path: "/",
+    });
+    return res;
+  } catch (e) {
+    console.error(e);
+    return NextResponse.json({ error: "Szerver hiba" }, { status: 500 });
+  }
+}
+=== app/api/profile/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+import bcrypt from "bcryptjs";
+
+export const runtime = "nodejs";
+
+export async function PUT(req: NextRequest) {
+  const authUser = await getUserFromRequest(req);
+  if (!authUser) {
+    return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+  }
+
+  const { username, email, password } = await req.json();
+
+  const data: any = {};
+  if (username) data.username = username;
+  if (email) data.email = email;
+  if (password && password.trim().length > 0) {
+    data.password = await bcrypt.hash(password, 10);
+  }
+
+  try {
+    const updated = await prisma.user.update({
+      where: { id: authUser.id },
+      data,
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        avatarUrl: true,
+        role: true,
+        joinedAt: true,
+      },
+    });
+
+    return NextResponse.json({ user: updated });
+  } catch (err: any) {
+    console.error(err);
+    return NextResponse.json(
+      { error: "Nem sikerült frissíteni a profilt." },
+      { status: 500 }
+    );
+  }
+}
+=== app/api/threads/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+
+export async function GET(req: NextRequest) {
+  const categoryId = req.nextUrl.searchParams.get("categoryId") || undefined;
+  const threads = await prisma.thread.findMany({
+    where: categoryId ? { categoryId } : {},
+    include: {
+      author: { select: { id: true, username: true } },
+      category: true,
+    },
+    orderBy: [{ isPinned: "desc" }, { lastActive: "desc" }],
+  });
+  return NextResponse.json({ threads });
+}
+
+export async function POST(req: NextRequest) {
+  const user = await getUserFromRequest(req);
+  if (!user) return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+
+  const { title, excerpt, categoryId } = await req.json();
+  if (!title || !categoryId) {
+    return NextResponse.json({ error: "Hiányzó mezők" }, { status: 400 });
+  }
+
+  const thread = await prisma.thread.create({
+    data: {
+      title,
+      excerpt: excerpt || "",
+      authorId: user.id,
+      categoryId,
+    },
+  });
+
+  return NextResponse.json({ thread });
+}
+=== app/api/threads/[id]/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+
+interface Params {
+  params: { id: string };
+}
+
+export async function GET(req: NextRequest, { params }: Params) {
+  const thread = await prisma.thread.findUnique({
+    where: { id: params.id },
+    include: {
+      author: { select: { id: true, username: true } },
+      category: true,
+      posts: {
+        include: {
+          author: { select: { id: true, username: true, avatarUrl: true, role: true } },
+          likes: true,
+        },
+        orderBy: { createdAt: "asc" },
+      },
+    },
+  });
+
+  if (!thread) {
+    return NextResponse.json({ error: "Téma nem található" }, { status: 404 });
+  }
+
+  return NextResponse.json({ thread });
+}
+=== app/api/users/search/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+
+export async function GET(req: NextRequest) {
+  const current = await getUserFromRequest(req);
+  if (!current) return NextResponse.json({ users: [] });
+
+  const q = req.nextUrl.searchParams.get("q");
+  if (!q || q.trim().length < 1) return NextResponse.json({ users: [] });
+
+  const users = await prisma.user.findMany({
+    where: {
+      AND: [
+        { id: { not: current.id } },
+        {
+          username: {
+            contains: q,
+            mode: "insensitive",
+          },
+        },
+      ],
+    },
+    select: { id: true, username: true, avatarUrl: true },
+    take: 10,
+  });
+
+  return NextResponse.json({ users });
+}
+=== app/api/dm/messages/[userId]/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+
+interface Params {
+  params: { userId: string };
+}
+
+export async function GET(req: NextRequest, { params }: Params) {
+  const user = await getUserFromRequest(req);
+  if (!user) return NextResponse.json({ messages: [] }, { status: 401 });
+
+  const otherId = params.userId;
+
+  const messages = await prisma.dmMessage.findMany({
+    where: {
+      OR: [
+        { fromId: user.id, toId: otherId },
+        { fromId: otherId, toId: user.id },
+      ],
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  return NextResponse.json({ messages });
+}
+=== app/api/dm/conversations/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+
+export async function GET(req: NextRequest) {
+  const user = await getUserFromRequest(req);
+  if (!user) return NextResponse.json({ conversations: [] });
+
+  const messages = await prisma.dmMessage.findMany({
+    where: { OR: [{ fromId: user.id }, { toId: user.id }] },
+    orderBy: { createdAt: "desc" },
+  });
+
+  const map = new Map<string, { userId: string; lastMessage: string; lastAt: Date }>();
+
+  for (const m of messages) {
+    const otherId = m.fromId === user.id ? m.toId : m.fromId;
+    const existing = map.get(otherId);
+    if (!existing || existing.lastAt < m.createdAt) {
+      map.set(otherId, {
+        userId: otherId,
+        lastMessage: m.text,
+        lastAt: m.createdAt,
+      });
+    }
+  }
+
+  const userIds = Array.from(map.keys());
+  const users = await prisma.user.findMany({
+    where: { id: { in: userIds } },
+    select: { id: true, username: true, avatarUrl: true },
+  });
+
+  const conversations = userIds.map((id) => {
+    const u = users.find((x) => x.id === id)!;
+    const info = map.get(id)!;
+    return {
+      userId: u.id,
+      username: u.username,
+      avatarUrl: u.avatarUrl,
+      lastMessage: info.lastMessage,
+      lastAt: info.lastAt,
+    };
+  });
+
+  return NextResponse.json({ conversations });
+}
+=== app/api/dm/send/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+
+export async function POST(req: NextRequest) {
+  const user = await getUserFromRequest(req);
+  if (!user) return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+
+  const { toId, text } = await req.json();
+  if (!toId || !text) {
+    return NextResponse.json({ error: "Hiányzó mezők" }, { status: 400 });
+  }
+
+  const msg = await prisma.dmMessage.create({
+    data: {
+      fromId: user.id,
+      toId,
+      text,
+    },
+  });
+
+  await prisma.notification.create({
+    data: {
+      type: "dm",
+      title: "Új privát üzenet",
+      message: `${user.username} üzenetet küldött neked.`,
+      userId: toId,
+    },
+  });
+
+  return NextResponse.json({ message: msg });
+}
+=== app/api/avatar/upload/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+
+export const runtime = "nodejs";
+
+export async function POST(req: NextRequest) {
+  const authUser = await getUserFromRequest(req);
+  if (!authUser) {
+    return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+  }
+
+  const formData = await req.formData();
+  const file = formData.get("avatar") as File | null;
+
+  if (!file) {
+    return NextResponse.json({ error: "Avatar fájl szükséges" }, { status: 400 });
+  }
+
+  if (file.size > 2 * 1024 * 1024) {
+    return NextResponse.json({ error: "Max 2MB méret engedélyezett." }, { status: 400 });
+  }
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const base64 = buffer.toString("base64");
+    const dataUrl = `data:${file.type};base64,${base64}`;
+
+    const updated = await prisma.user.update({
+      where: { id: authUser.id },
+      data: { avatarUrl: dataUrl },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        avatarUrl: true,
+        role: true,
+        joinedAt: true,
+      },
+    });
+
+    return NextResponse.json({ user: updated });
+  } catch (err: any) {
+    console.error(err);
+    return NextResponse.json(
+      { error: "Nem sikerült az avatar frissítése." },
+      { status: 500 }
+    );
+  }
+}
+=== app/api/notifications/read/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+
+export async function POST(req: NextRequest) {
+  const user = await getUserFromRequest(req);
+  if (!user) return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+
+  const { id } = await req.json();
+  if (!id) return NextResponse.json({ error: "id szükséges" }, { status: 400 });
+
+  await prisma.notification.updateMany({
+    where: { id, userId: user.id },
+    data: { read: true },
+  });
+
+  return NextResponse.json({ success: true });
+}
+=== app/api/notifications/read-all/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+
+export async function POST(req: NextRequest) {
+  const user = await getUserFromRequest(req);
+  if (!user) return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+
+  await prisma.notification.updateMany({
+    where: { userId: user.id, read: false },
+    data: { read: true },
+  });
+
+  return NextResponse.json({ success: true });
+}
+=== app/api/notifications/route.ts ===
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getUserFromRequest } from "@/lib/getUser";
+
+export async function GET(req: NextRequest) {
+  const user = await getUserFromRequest(req);
+  if (!user) return NextResponse.json({ notifications: [] });
+
+  const notifications = await prisma.notification.findMany({
+    where: { userId: user.id },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+
+  return NextResponse.json({ notifications });
+}
