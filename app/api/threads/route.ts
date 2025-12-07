@@ -16,13 +16,18 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const user = await getUserFromRequest(req);
-  if (!user) return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+  const body = await req.json();
+  console.log("POST /api/threads RECEIVED BODY:", JSON.stringify(body, null, 2));
 
-  const { title, excerpt, categoryId } = await req.json();
-  if (!title || !categoryId) {
-    return NextResponse.json({ error: "Hiányzó mezők" }, { status: 400 });
+  const user = await getUserFromRequest(req);
+  if (!user) {
+    console.log("NO USER AUTH");
+    return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
   }
+
+  const { title, excerpt, categoryId } = body;
+  console.log("PARSED:", { title, excerpt, categoryId });
+
 
   const thread = await prisma.thread.create({
     data: {
@@ -35,3 +40,4 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ thread });
 }
+

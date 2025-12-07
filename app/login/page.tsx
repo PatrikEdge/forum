@@ -1,67 +1,74 @@
 "use client";
-
-import React, { useState } from "react";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-export default function LoginPage() {
+export default function Login() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  async function handleLogin(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
+  const handleLogin = async () => {
+    setLoading(true);
+    setError(null);
 
-    try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password })
+    });
 
-      if (!res.ok) {
-        const data = await res.json();
-        setError(data.error || "Hibás adatok");
-        return;
-      }
+    const data = await res.json();
+    setLoading(false);
 
-      // Login sikeres, JWT cookie automatikusan mentve
-      router.push("/");
-      router.refresh(); // user állapot frissítés
-    } catch (err) {
-      console.error(err);
-      setError("Szerver hiba");
-    }
-  }
+    if (!res.ok) return setError(data.error || "Hiba történt.");
+    router.push("/");
+  };
 
   return (
-    <div className="flex justify-center items-center h-screen">
-      <form onSubmit={handleLogin} className="w-96 space-y-4 border p-8 rounded-lg shadow">
-        <h1 className="text-2xl font-bold">Bejelentkezés</h1>
+    <div className="bg-gradient-to-br from-green-900 via-green-800 to-emerald-900 min-h-screen flex items-center justify-center p-4 text-white">
+      <div className="bg-black/50 backdrop-blur-xl p-8 rounded-3xl border border-white/20 shadow-xl max-w-sm w-full">
+        <h1 className="text-2xl font-bold text-center mb-6">Bejelentkezés</h1>
 
-        <Input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
+        <div className="flex flex-col gap-4">
+          <input
+            type="email"
+            placeholder="E-mail cím"
+            className="bg-white/20 border border-white/30 rounded-lg px-4 py-2 placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-lime-400"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
 
-        <Input
-          type="password"
-          placeholder="Jelszó"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
+          <input
+            type="password"
+            placeholder="Jelszó"
+            className="bg-white/20 border border-white/30 rounded-lg px-4 py-2 placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-lime-400"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
 
-        {error && <p className="text-red-600">{error}</p>}
+          {error && <p className="text-red-300 text-sm">{error}</p>}
 
-        <Button type="submit" className="w-full">
-          Belépés
-        </Button>
-      </form>
+          <button
+            disabled={loading}
+            onClick={handleLogin}
+            className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/30 disabled:text-white/40 text-black py-2 rounded-lg font-semibold transition"
+          >
+            {loading ? "Belépés..." : "Belépés"}
+          </button>
+
+          <p className="text-sm text-center text-white/70">
+            Nincs fiókod?{" "}
+            <button
+              className="text-lime-300 hover:text-lime-200"
+              onClick={() => router.push("/register")}
+            >
+              Regisztráció
+            </button>
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

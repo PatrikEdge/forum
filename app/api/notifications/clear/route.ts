@@ -2,11 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
 
-interface Params {
-  params: { id: string };
-}
-
-export async function POST(req: NextRequest, { params }: Params) {
+export async function POST(req: NextRequest) {
   const user = await getUserFromRequest(req);
   if (!user) {
     return NextResponse.json(
@@ -15,12 +11,8 @@ export async function POST(req: NextRequest, { params }: Params) {
     );
   }
 
-  await prisma.notification.updateMany({
-    where: {
-      id: params.id,
-      userId: user.id,
-    },
-    data: { isRead: true },
+  await prisma.notification.deleteMany({
+    where: { userId: user.id },
   });
 
   return NextResponse.json({ success: true });

@@ -1,29 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-interface Params {
-  params: { id: string };
-}
+export async function GET(
+  req: Request,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params; // ⭐ FONTOS!
 
-export async function GET(req: NextRequest, { params }: Params) {
   const thread = await prisma.thread.findUnique({
-    where: { id: params.id },
+    where: { id },
     include: {
-      author: { select: { id: true, username: true } },
+      author: { select: { id: true, username: true, avatarUrl: true, role: true } },
       category: true,
       posts: {
+        orderBy: { createdAt: "asc" },
         include: {
           author: { select: { id: true, username: true, avatarUrl: true, role: true } },
           likes: true,
         },
-        orderBy: { createdAt: "asc" },
       },
     },
   });
 
   if (!thread) {
-    return NextResponse.json({ error: "Téma nem található" }, { status: 404 });
+    return Response.json({ error: "Thread not found" }, { status: 404 });
   }
 
-  return NextResponse.json({ thread });
+  return Response.json({ thread });
 }

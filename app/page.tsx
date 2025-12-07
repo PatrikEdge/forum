@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Home, User, MessageCircle, Bell, Mail, Search, ThumbsUp, Send, X, Pin, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 const useUser = () => {
   const [user, setUser] = useState<any>(null);
@@ -13,7 +14,7 @@ const useUser = () => {
       if (res.ok) {
         setUser(await res.json());
       } else {
-        setUser(null); // nincs bejelentkezve
+        setUser(null);
       }
     } catch {
       setUser(null);
@@ -72,8 +73,16 @@ function Sidebar({ activePage, setActivePage, unreadNotifications, unreadDM }: a
 }
 
 // ------------------------- Topbar -------------------------
+import { LogOut } from "lucide-react";
+
 function Topbar({ user }: any) {
   const [searchQuery, setSearchQuery] = useState("");
+  const router = useRouter();
+
+  const handleLogout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/login");
+  };
 
   return (
     <div className="flex items-center justify-between bg-white/10 backdrop-blur-xl p-3 md:p-4 rounded-2xl border border-white/20 shadow-lg">
@@ -93,7 +102,9 @@ function Topbar({ user }: any) {
             {user.avatarUrl ? (
               <img src={user.avatarUrl} className="w-full h-full object-cover" alt="Avatar" />
             ) : (
-              <span className="text-sm font-semibold">{user.username.charAt(0).toUpperCase()}</span>
+              <span className="text-sm font-semibold">
+  {user?.username?.charAt(0)?.toUpperCase() ?? "?"}
+</span>
             )}
           </div>
           <div className="text-xs md:text-sm text-right hidden md:block">
@@ -102,6 +113,14 @@ function Topbar({ user }: any) {
               {user.role === "MODERATOR" ? "Moderátor" : user.role === "ADMIN" ? "Admin" : "Felhasználó"}
             </p>
           </div>
+
+          <button
+            onClick={handleLogout}
+            title="Kijelentkezés"
+            className="p-2 bg-red-500/80 hover:bg-red-600 text-black rounded-lg transition flex items-center"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       )}
     </div>
@@ -111,10 +130,16 @@ function Topbar({ user }: any) {
 // ------------------------- Main Page -------------------------
 export default function ForumUI() {
   const { user, loading, refreshUser } = useUser();
+  const router = useRouter();
 
-  const [activePage, setActivePage] = useState("home");
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push("/login");
+    }
+  }, [loading, user, router]);
 
   // Forum state
+  const [activePage, setActivePage] = useState("home");
   const [categories, setCategories] = useState<any[]>([]);
   const [threads, setThreads] = useState<any[]>([]);
   const [activeThread, setActiveThread] = useState<any>(null);
@@ -179,7 +204,7 @@ export default function ForumUI() {
 
   const loadThread = async (id: string) => {
     try {
-      const res = await fetch(`/api/thread/${id}`);
+      const res = await fetch(`/api/threads/${id}`);
       if (res.ok) {
         const data = await res.json();
         setActiveThread(data.thread);
@@ -239,7 +264,7 @@ export default function ForumUI() {
   const loadChatMessages = async () => {
     setChatLoading(true);
     try {
-      const res = await fetch("/api/chat/messages");
+      const res = await fetch("/api/chat/message");
       if (res.ok) {
         const data = await res.json();
         setChatMessages(data.messages);
@@ -256,7 +281,7 @@ export default function ForumUI() {
     setChatText("");
 
     try {
-      await fetch("/api/chat/send", {
+      await fetch("/api/chat/message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
@@ -351,25 +376,22 @@ export default function ForumUI() {
     }
   };
 
-  // Initial load
-  useEffect(() => {
-    if (user) {
-      setProfileUsername(user.username || "");
-      setProfileEmail(user.email || "");
-      loadUnreadCounts();
-      
-      // Poll for unread counts every 30 seconds
-      const interval = setInterval(loadUnreadCounts, 30000);
-      return () => clearInterval(interval);
-    }
-  }, [user]);
+useEffect(() => {
+  if (!user) return;
+
+  setProfileUsername(user.username || "");
+  setProfileEmail(user.email || "");
+  loadUnreadCounts();
+
+  const interval = setInterval(loadUnreadCounts, 30000);
+  return () => clearInterval(interval);
+}, [user]);
 
   useEffect(() => {
     if (activePage === "dm") {
       loadDMUsers();
     } else if (activePage === "chat") {
       loadChatMessages();
-      // Poll for new messages every 5 seconds
       const interval = setInterval(loadChatMessages, 5000);
       return () => clearInterval(interval);
     } else if (activePage === "notifications") {
@@ -385,50 +407,63 @@ export default function ForumUI() {
     loadThreads();
   }, [selectedCategory]);
 
-  useEffect(() => {
-    if (activeThread) loadThread(activeThread.id);
-  }, [activeThread?.id]);
+useEffect(() => {
+  if (!activeThread) return;
+  loadThread(activeThread.id);
+}, [activeThread?.id]);
+
+useEffect(() => {
+  if (showNewTopicPopup && categories.length > 0) {
+    setSelectedCategory(categories[0].id);
+  }
+}, [showNewTopicPopup, categories]);
 
   // ------------------------- Actions -------------------------
   const handleAddReply = async () => {
-    if (!newReply.trim()) return;
-    try {
-      await fetch("/api/posts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threadId: activeThread.id, text: newReply }),
-      });
-      setNewReply("");
-      loadThread(activeThread.id);
-    } catch (err) {
-      console.error("Failed to add reply:", err);
-    }
-  };
+  if (!newReply.trim()) return;
+
+  try {
+    await fetch("/api/posts", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        threadId: activeThread.id,
+        text: newReply,
+      }),
+    });
+
+    setNewReply("");
+    loadThread(activeThread.id);
+  } catch (err) {
+    console.error("Failed to add reply:", err);
+  }
+};
+
 
   const handleAddTopic = async () => {
-    if (!newTopicTitle.trim() || !selectedCategory) return;
-    try {
-      await fetch("/api/threads", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: newTopicTitle,
-          excerpt: newTopicBody,
-          categoryId: selectedCategory !== "all" ? selectedCategory : categories[0]?.id,
-        }),
-      });
-      setShowNewTopicPopup(false);
-      setNewTopicBody("");
-      setNewTopicTitle("");
-      loadThreads();
-    } catch (err) {
-      console.error("Failed to add topic:", err);
-    }
-  };
+  if (!newTopicTitle.trim() || !selectedCategory) return;
+
+  await fetch("/api/threads", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: newTopicTitle,
+      excerpt: newTopicBody,
+      categoryId: selectedCategory,
+    }),
+  });
+
+  setShowNewTopicPopup(false);
+  setNewTopicBody("");
+  setNewTopicTitle("");
+  loadThreads();
+};
 
   const toggleLike = async (postId: string) => {
     try {
-      await fetch("/api/like", {
+      await fetch("/api/posts/like", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ postId }),
@@ -505,9 +540,6 @@ export default function ForumUI() {
       setProfileError(err.message || "Nem sikerült frissíteni az avatart.");
     }
   };
-
-  if (loading) return <div className="p-10 text-white">Betöltés...</div>;
-  if (!user) return <div className="p-10 text-white">Jelentkezz be a fórumhoz!</div>;
 
   // ------------------------- Render -------------------------
   return (
@@ -927,7 +959,7 @@ export default function ForumUI() {
                 {user.avatarUrl ? (
                   <img src={user.avatarUrl} className="w-full h-full object-cover" alt="Avatar" />
                 ) : (
-                  user.username.charAt(0).toUpperCase()
+                  (user?.username?.charAt(0)?.toUpperCase() ?? "?")
                 )}
               </div>
               <div>
@@ -1021,47 +1053,67 @@ export default function ForumUI() {
       </div>
 
       {/* Modal: New Topic */}
-      {showNewTopicPopup && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <div className="bg-white/10 border border-white/20 backdrop-blur-xl p-6 rounded-2xl w-full max-w-md shadow-xl">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-semibold text-white">Új téma hozzáadása</h3>
-              <button
-                onClick={() => setShowNewTopicPopup(false)}
-                className="text-white/70 hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <input
-              value={newTopicTitle}
-              onChange={(e) => setNewTopicTitle(e.target.value)}
-              placeholder="Téma címe..."
-              className="w-full mb-3 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-            />
-            <textarea
-              value={newTopicBody}
-              onChange={(e) => setNewTopicBody(e.target.value)}
-              placeholder="Leírás..."
-              className="w-full mb-4 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400 min-h-[100px]"
-            />
-            <div className="flex justify-end gap-2">
-              <button 
-                className="text-white hover:bg-white/10 px-4 py-2 rounded-lg transition" 
-                onClick={() => setShowNewTopicPopup(false)}
-              >
-                Mégse
-              </button>
-              <button 
-                className="bg-lime-500 hover:bg-lime-600 text-black px-4 py-2 rounded-lg font-semibold transition" 
-                onClick={handleAddTopic}
-              >
-                Hozzáadás
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+{showNewTopicPopup && (
+  <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
+    <div className="bg-white/10 border border-white/20 backdrop-blur-xl p-6 rounded-2xl w-full max-w-md shadow-xl">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xl font-semibold text-white">Új téma hozzáadása</h3>
+        <button
+          onClick={() => setShowNewTopicPopup(false)}
+          className="text-white/70 hover:text-white"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Title */}
+      <input
+        value={newTopicTitle}
+        onChange={(e) => setNewTopicTitle(e.target.value)}
+        placeholder="Téma címe..."
+        className="w-full mb-3 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+      />
+
+      {/* Body */}
+      <textarea
+        value={newTopicBody}
+        onChange={(e) => setNewTopicBody(e.target.value)}
+        placeholder="Leírás..."
+        className="w-full mb-4 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400 min-h-[100px]"
+      />
+
+      {/* Category Select */}
+      <select
+        value={selectedCategory}
+        onChange={(e) => setSelectedCategory(e.target.value)}
+        className="w-full mb-4 bg-white/20 text-white px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+      >
+        <option value="all" disabled>Válassz kategóriát...</option>
+        {categories.map((cat) => (
+          <option key={cat.id} value={cat.id}>
+            {cat.name}
+          </option>
+        ))}
+      </select>
+
+      {/* Buttons */}
+      <div className="flex justify-end gap-2">
+        <button 
+          className="text-white hover:bg-white/10 px-4 py-2 rounded-lg transition" 
+          onClick={() => setShowNewTopicPopup(false)}
+        >
+          Mégse
+        </button>
+        <button 
+          className="bg-lime-500 hover:bg-lime-600 text-black px-4 py-2 rounded-lg font-semibold transition" 
+          onClick={handleAddTopic}
+        >
+          Hozzáadás
+        </button>
+      </div>
+    </div>
+  </div>
+)}
     </div>
   );
 }

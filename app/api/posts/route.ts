@@ -22,24 +22,22 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const user = await getUserFromRequest(req);
-  if (!user) return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+  if (!user) {
+    return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+  }
 
   const { threadId, text } = await req.json();
-  if (!threadId || !text) {
+
+  if (!threadId || !text?.trim()) {
     return NextResponse.json({ error: "Hiányzó mezők" }, { status: 400 });
   }
 
   const post = await prisma.post.create({
     data: {
-      threadId,
       text,
+      threadId,
       authorId: user.id,
     },
-  });
-
-  await prisma.thread.update({
-    where: { id: threadId },
-    data: { lastActive: new Date() },
   });
 
   return NextResponse.json({ post });

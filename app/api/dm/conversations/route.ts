@@ -1,47 +1,42 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
 
-export async function GET(req: NextRequest) {
+export async function GET(req: Request) {
   const user = await getUserFromRequest(req);
   if (!user) return NextResponse.json({ conversations: [] });
 
-  const messages = await prisma.dmMessage.findMany({
+  const messages = await prisma.dMMessage.findMany({
     where: { OR: [{ fromId: user.id }, { toId: user.id }] },
     orderBy: { createdAt: "desc" },
   });
 
-  const map = new Map<string, { userId: string; lastMessage: string; lastAt: Date }>();
+  const users = new Map<string, {
+    userId: string;
+    username: string;
+    avatarUrl: string | null;
+    lastMessage: string;
+  }>();
 
-  for (const m of messages) {
-    const otherId = m.fromId === user.id ? m.toId : m.fromId;
-    const existing = map.get(otherId);
-    if (!existing || existing.lastAt < m.createdAt) {
-      map.set(otherId, {
-        userId: otherId,
-        lastMessage: m.text,
-        lastAt: m.createdAt,
+  for (const msg of messages) {
+    const otherUserId = msg.fromId === user.id ? msg.toId : msg.fromId;
+
+    if (!users.has(otherUserId)) {
+      const other = await prisma.user.findUnique({
+        where: { id: otherUserId },
+        select: { id: true, username: true, avatarUrl: true },
       });
+
+      if (other) {
+        users.set(otherUserId, {
+          userId: other.id,
+          username: other.username,
+          avatarUrl: other.avatarUrl,
+          lastMessage: msg.text,
+        });
+      }
     }
   }
 
-  const userIds = Array.from(map.keys());
-  const users = await prisma.user.findMany({
-    where: { id: { in: userIds } },
-    select: { id: true, username: true, avatarUrl: true },
-  });
-
-  const conversations = userIds.map((id) => {
-    const u = users.find((x) => x.id === id)!;
-    const info = map.get(id)!;
-    return {
-      userId: u.id,
-      username: u.username,
-      avatarUrl: u.avatarUrl,
-      lastMessage: info.lastMessage,
-      lastAt: info.lastAt,
-    };
-  });
-
-  return NextResponse.json({ conversations });
+  return NextResponse.json({ conversations: Array.from(users.values()) });
 }
