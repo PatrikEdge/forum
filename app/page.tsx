@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Home, User, MessageCircle, Bell, Mail, Search, ThumbsUp, Send, X, Pin, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useWebSocket } from "./prodivers/WebsocketProvider";
 
 const useUser = () => {
   const [user, setUser] = useState<any>(null);
@@ -127,10 +128,167 @@ function Topbar({ user }: any) {
   );
 }
 
+// ================== GLOBAL CHAT COMPONENT ==================
+
+function GlobalChat({ user }: { user: any }) {
+  const ws = useWebSocket();
+  const [text, setText] = useState("");
+  const [messages, setMessages] = useState<any[]>([]);
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  // 🟢 Üzenetek betöltése fallbackként (ha WS lemarad)
+  async function loadMessages() {
+    const res = await fetch("/api/chat/message");
+    if (res.ok) setMessages((await res.json()).messages);
+  }
+
+  // 📌 WebSocket listener
+  useEffect(() => {
+    if (!ws) return;
+
+    function onMessage(ev: MessageEvent) {
+      try {
+        const data = JSON.parse(ev.data);
+        if (data.type === "global_message") {
+          setMessages((prev) => [...prev, data.message]);
+        }
+      } catch (e) {
+        console.error("WS parse error:", e);
+      }
+    }
+
+    ws.addEventListener("message", onMessage);
+    return () => ws.removeEventListener("message", onMessage);
+  }, [ws]);
+
+  // 🔄 Alap betöltés
+  useEffect(() => {
+    loadMessages();
+  }, []);
+
+  // 🔽 Scroll mindig alulra
+  useEffect(() => {
+    if (!listRef.current) return;
+    listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [messages]);
+
+  // 🚀 Küldés WebSockettel vagy HTTP fallback
+  function handleSend() {
+    if (!text.trim()) return;
+    const msg = text;
+    setText("");
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "global_message", text: msg }));
+      return;
+    }
+
+    // HTTP fallback ha WS halott
+    fetch("/api/chat/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: msg }),
+    }).then(loadMessages);
+  }
+
+  // 🗑 Törlés jogosultsággal
+  async function deleteMsg(id: string) {
+    await fetch(`/api/chat/message/${id}`, { method: "DELETE" });
+    loadMessages();
+  }
+
+  return (
+    <div className="flex flex-col h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
+      <div className="border-b border-white/20 p-4">
+        <h2 className="text-xl font-bold">🌍 Globális Chat</h2>
+        <p className="text-sm text-white/70">Beszélgetés valós időben</p>
+      </div>
+
+      <div ref={listRef} className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
+        {messages.map((msg) => (
+          <div key={msg.id} className="flex items-start gap-3 p-2 hover:bg-white/5 rounded-lg group">
+            <div className="w-8 h-8 rounded-full overflow-hidden bg-white/20 flex items-center justify-center flex-shrink-0">
+              {msg.author?.avatarUrl ? (
+                <img src={msg.author.avatarUrl} className="w-full h-full object-cover" alt="" />
+              ) : (
+                <span className="text-xs">{msg.author?.username?.charAt(0)?.toUpperCase() ?? "?"}</span>
+              )}
+            </div>
+
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm">{msg.author?.username}</span>
+                {msg.author?.role === "MODERATOR" && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-lime-500/80 text-black">MOD</span>
+                )}
+                <span className="text-[11px] text-white/50">
+                  {new Date(msg.createdAt).toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              </div>
+              <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
+            </div>
+
+            {(user.role === "ADMIN" || user.role === "MODERATOR" || msg.authorId === user.id) && (
+              <button
+                onClick={() => deleteMsg(msg.id)}
+                className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 transition"
+                title="Törlés"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="border-t border-white/20 p-4 flex gap-2">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())}
+          placeholder="Írj üzenetet..."
+          className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+        />
+
+        <button
+          onClick={handleSend}
+          disabled={!text.trim()}
+          className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition flex items-center gap-2"
+        >
+          <Send className="w-4 h-4" /> Küldés
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ------------------------- Main Page -------------------------
 export default function ForumUI() {
   const { user, loading, refreshUser } = useUser();
   const router = useRouter();
+  const ws = useWebSocket();
+  const [globalText, setGlobalText] = useState("");
+  const [sending, setSending] = useState(false);
+
+  function sendGlobalMessage() {
+    if (!globalText.trim()) return;
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "global_message", text: globalText }));
+      setGlobalText("");
+      return;
+    }
+
+    setSending(true);
+    fetch("/api/chat/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: globalText }),
+    }).finally(() => {
+      setGlobalText("");
+      setSending(false);
+    });
+  }
 
   useEffect(() => {
     if (!loading && !user) {
@@ -691,85 +849,6 @@ useEffect(() => {
           </div>
         )}
 
-        {/* ------- Global Chat ------- */}
-        {activePage === "chat" && (
-          <div className="flex flex-col h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
-            <div className="border-b border-white/20 p-4">
-              <h2 className="text-xl font-bold">Globális Chat</h2>
-              <p className="text-sm text-white/70">Beszélgess a közösséggel valós időben</p>
-            </div>
-
-            {chatLoading ? (
-              <div className="flex-1 flex items-center justify-center">
-                <p className="text-white/70">Betöltés...</p>
-              </div>
-            ) : (
-              <>
-                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
-                  {chatMessages.map((msg) => (
-                    <div
-                      key={msg.id}
-                      className="flex items-start gap-3 p-2 hover:bg-white/5 rounded-lg group"
-                    >
-                      <div className="w-8 h-8 rounded-full overflow-hidden bg-white/20 flex items-center justify-center flex-shrink-0">
-                        {msg.author.avatarUrl ? (
-                          <img src={msg.author.avatarUrl} className="w-full h-full object-cover" alt="" />
-                        ) : (
-                          <span className="text-xs">{msg.author.username.charAt(0).toUpperCase()}</span>
-                        )}
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-sm">{msg.author.username}</span>
-                          {msg.author.role === "MODERATOR" && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-lime-500/80 text-black">MOD</span>
-                          )}
-                          <span className="text-[11px] text-white/50">
-                            {new Date(msg.createdAt).toLocaleTimeString('hu-HU', { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                        <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
-                      </div>
-                      {(user.role === "MODERATOR" || user.role === "ADMIN" || msg.authorId === user.id) && (
-                        <button
-                          onClick={() => deleteChatMessage(msg.id)}
-                          className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 transition"
-                          title="Törlés"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                  {chatMessages.length === 0 && (
-                    <div className="flex-1 flex items-center justify-center text-white/70">
-                      <p>Még nincsenek üzenetek. Kezdd el a beszélgetést!</p>
-                    </div>
-                  )}
-                </div>
-
-                <div className="border-t border-white/20 p-4 flex gap-2">
-                  <input
-                    value={chatText}
-                    onChange={(e) => setChatText(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendChatMessage())}
-                    placeholder="Írj üzenetet..."
-                    className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-                  />
-                  <button
-                    onClick={sendChatMessage}
-                    disabled={!chatText.trim()}
-                    className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition flex items-center gap-2"
-                  >
-                    <Send className="w-4 h-4" />
-                    Küldés
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
         {/* ------- DM Page ------- */}
         {activePage === "dm" && (
           <div className="flex w-full h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
@@ -864,25 +943,29 @@ useEffect(() => {
                   </div>
 
                   <div className="border-t border-white/20 p-3 flex gap-2">
-                    <input
-                      value={dmText}
-                      onChange={(e) => setDMText(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-                      placeholder="Írj üzenetet..."
-                      className="flex-1 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-                    />
-                    <button
-                      onClick={sendMessage}
-                      className="bg-lime-500 hover:bg-lime-600 text-black px-4 py-2 rounded-lg font-semibold transition"
-                    >
-                      Küldés
-                    </button>
-                  </div>
+  <input
+    value={globalText}
+    onChange={(e) => setGlobalText(e.target.value)}
+    onKeyDown={(e) => e.key === "Enter" && sendGlobalMessage()}
+    disabled={sending}
+    placeholder="Írj üzenetet..."
+    className="flex-1 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400 disabled:opacity-50"
+  />
+
+  <button
+    onClick={sendGlobalMessage}
+    disabled={sending}
+    className="bg-lime-500 hover:bg-lime-600 disabled:bg-lime-800 disabled:cursor-not-allowed text-black px-4 py-2 rounded-lg font-semibold transition"
+  >
+    {sending ? "Küldés..." : "Küldés"}
+  </button>
+</div>
                 </>
               )}
             </div>
           </div>
         )}
+      
 
         {/* ------- Notifications Page ------- */}
         {activePage === "notifications" && (

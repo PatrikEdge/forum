@@ -14,16 +14,36 @@ export async function POST(req: NextRequest) {
   const file = formData.get("avatar") as File | null;
 
   if (!file) {
-    return NextResponse.json({ error: "Avatar fájl szükséges" }, { status: 400 });
+    return NextResponse.json({ error: "Nincs feltöltött fájl" }, { status: 400 });
   }
 
-  if (file.size > 2 * 1024 * 1024) {
-    return NextResponse.json({ error: "Max 2MB méret engedélyezett." }, { status: 400 });
+  const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
+  if (!allowedTypes.includes(file.type)) {
+    return NextResponse.json(
+      { error: "Csak PNG, JPG vagy WEBP engedélyezett" },
+      { status: 400 }
+    );
+  }
+
+  const allowedExt = [".png", ".jpg", ".jpeg", ".webp"];
+  const fileName = file.name.toLowerCase();
+  if (!allowedExt.some(ext => fileName.endsWith(ext))) {
+    return NextResponse.json(
+      { error: "A fájl kiterjesztése nem támogatott" },
+      { status: 400 }
+    );
+  }
+
+  const maxSize = 2 * 1024 * 1024; // 2MB
+  if (file.size > maxSize) {
+    return NextResponse.json(
+      { error: "A fájl mérete nem lehet nagyobb, mint 2MB" },
+      { status: 400 }
+    );
   }
 
   try {
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const buffer = Buffer.from(await file.arrayBuffer());
     const base64 = buffer.toString("base64");
     const dataUrl = `data:${file.type};base64,${base64}`;
 
@@ -41,7 +61,7 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json({ user: updated });
-  } catch (err: any) {
+  } catch (err) {
     console.error(err);
     return NextResponse.json(
       { error: "Nem sikerült az avatar frissítése." },

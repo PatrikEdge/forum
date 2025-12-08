@@ -1,5 +1,6 @@
 import "./globals.css";
 import { UserProvider } from "./prodivers/UserProvider";
+import { WebSocketProvider } from "./prodivers/WebsocketProvider";
 
 export const metadata = {
   title: "Forum",
@@ -11,7 +12,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="hu">
       <body>
         <UserProvider>
-          {children}
+          <WebSocketProvider>
+            {children}
+          </WebSocketProvider>
         </UserProvider>
       </body>
     </html>
