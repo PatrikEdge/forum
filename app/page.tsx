@@ -1,10 +1,67 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import { Home, User, MessageCircle, Bell, Mail, Search, ThumbsUp, Send, X, Pin, Trash2 } from "lucide-react";
+import React, { useEffect, useState, useRef } from "react";
+import {
+  Home,
+  User,
+  MessageCircle,
+  Bell,
+  Mail,
+  Search,
+  ThumbsUp,
+  Send,
+  X,
+  Pin,
+  Trash2,
+  LogOut,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useWebSocket } from "./prodivers/WebsocketProvider";
+import Cropper from "react-easy-crop";
 
+// --------- helper a cropolt képhez (canvas) ---------
+const createImage = (url: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    image.addEventListener("load", () => resolve(image));
+    image.addEventListener("error", (error) => reject(error));
+    image.setAttribute("crossOrigin", "anonymous");
+    image.src = url;
+  });
+
+async function getCroppedImg(imageSrc: string, pixelCrop: any): Promise<Blob> {
+  const image = await createImage(imageSrc);
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+
+  if (!ctx) {
+    throw new Error("Canvas context not available");
+  }
+
+  canvas.width = pixelCrop.width;
+  canvas.height = pixelCrop.height;
+
+  ctx.drawImage(
+    image,
+    pixelCrop.x,
+    pixelCrop.y,
+    pixelCrop.width,
+    pixelCrop.height,
+    0,
+    0,
+    pixelCrop.width,
+    pixelCrop.height
+  );
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Canvas is empty"));
+    }, "image/png");
+  });
+}
+
+// ------------------------- useUser -------------------------
 const useUser = () => {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -74,8 +131,6 @@ function Sidebar({ activePage, setActivePage, unreadNotifications, unreadDM }: a
 }
 
 // ------------------------- Topbar -------------------------
-import { LogOut } from "lucide-react";
-
 function Topbar({ user }: any) {
   const [searchQuery, setSearchQuery] = useState("");
   const router = useRouter();
@@ -104,8 +159,8 @@ function Topbar({ user }: any) {
               <img src={user.avatarUrl} className="w-full h-full object-cover" alt="Avatar" />
             ) : (
               <span className="text-sm font-semibold">
-  {user?.username?.charAt(0)?.toUpperCase() ?? "?"}
-</span>
+                {user?.username?.charAt(0)?.toUpperCase() ?? "?"}
+              </span>
             )}
           </div>
           <div className="text-xs md:text-sm text-right hidden md:block">
@@ -129,28 +184,95 @@ function Topbar({ user }: any) {
 }
 
 // ================== GLOBAL CHAT COMPONENT ==================
-
-function GlobalChat({ user }: { user: any }) {
+function GlobalChat({ user, messages, setMessages }: { 
+  user: any, 
+  messages: any[], 
+  setMessages: any 
+}) {
   const ws = useWebSocket();
   const [text, setText] = useState("");
-  const [messages, setMessages] = useState<any[]>([]);
+  const [typingUser, setTypingUser] = useState<string | null>(null);
+
+  // ---- Edit state ----
+  const [editMessage, setEditMessage] = useState<any>(null);
+  const [editText, setEditText] = useState("");
+
   const listRef = useRef<HTMLDivElement | null>(null);
 
-  // 🟢 Üzenetek betöltése fallbackként (ha WS lemarad)
-  async function loadMessages() {
-    const res = await fetch("/api/chat/message");
-    if (res.ok) setMessages((await res.json()).messages);
+  const REACTIONS = ["❤️", "😆", "👍", "😡", "😢", "😮"];
+
+  // ---- Typing ----
+  function sendTyping() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "typing", chat: "global" }));
   }
 
-  // 📌 WebSocket listener
+  // ---- Reactions ----
+  function toggleReaction(messageId: string, emoji: string) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "chat_reaction", messageId, emoji }));
+  }
+
+  // ---- Editing ----
+  function startEdit(msg: any) {
+    setEditMessage(msg);
+    setEditText(msg.text);
+  }
+
+  function saveEdit() {
+    if (!editMessage || !editText.trim() || !ws) return;
+
+    ws.send(JSON.stringify({
+      type: "chat_edit",
+      id: editMessage.id,
+      text: editText.trim(),
+    }));
+
+    setEditMessage(null);
+    setEditText("");
+  }
+
+  // WS LISTENER (REACTIONS + EDIT + TYPING)
   useEffect(() => {
     if (!ws) return;
 
     function onMessage(ev: MessageEvent) {
       try {
         const data = JSON.parse(ev.data);
+
+        // ---- Global message ----
         if (data.type === "global_message") {
-          setMessages((prev) => [...prev, data.message]);
+          setMessages((prev: any[]) => [...prev, data.message]);
+          return;
+        }
+
+        // ---- Typing ----
+        if (data.type === "typing" && data.chat === "global") {
+          if (data.userId !== user.id) {
+            setTypingUser(data.username);
+            setTimeout(() => setTypingUser(null), 3000);
+          }
+          return;
+        }
+
+        // ---- Reactions ----
+        if (data.type === "chat_reaction") {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === data.messageId ? { ...m, reactions: data.reactions } : m
+            )
+          );
+          return;
+        }
+
+        // ---- Edit ----
+        if (data.type === "chat_edit") {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === data.message.id ? data.message : m
+            )
+          );
+          return;
         }
       } catch (e) {
         console.error("WS parse error:", e);
@@ -159,42 +281,24 @@ function GlobalChat({ user }: { user: any }) {
 
     ws.addEventListener("message", onMessage);
     return () => ws.removeEventListener("message", onMessage);
-  }, [ws]);
+  }, [ws, user.id, setMessages]);
 
-  // 🔄 Alap betöltés
-  useEffect(() => {
-    loadMessages();
-  }, []);
-
-  // 🔽 Scroll mindig alulra
+  // AUTO-SCROLL
   useEffect(() => {
     if (!listRef.current) return;
     listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [messages]);
 
-  // 🚀 Küldés WebSockettel vagy HTTP fallback
+  // SEND MESSAGE
   function handleSend() {
     if (!text.trim()) return;
-    const msg = text;
+    const msg = text.trim();
     setText("");
 
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "global_message", text: msg }));
       return;
     }
-
-    // HTTP fallback ha WS halott
-    fetch("/api/chat/message", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: msg }),
-    }).then(loadMessages);
-  }
-
-  // 🗑 Törlés jogosultsággal
-  async function deleteMsg(id: string) {
-    await fetch(`/api/chat/message/${id}`, { method: "DELETE" });
-    loadMessages();
   }
 
   return (
@@ -204,47 +308,83 @@ function GlobalChat({ user }: { user: any }) {
         <p className="text-sm text-white/70">Beszélgetés valós időben</p>
       </div>
 
-      <div ref={listRef} className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
-        {messages.map((msg) => (
-          <div key={msg.id} className="flex items-start gap-3 p-2 hover:bg-white/5 rounded-lg group">
-            <div className="w-8 h-8 rounded-full overflow-hidden bg-white/20 flex items-center justify-center flex-shrink-0">
-              {msg.author?.avatarUrl ? (
-                <img src={msg.author.avatarUrl} className="w-full h-full object-cover" alt="" />
-              ) : (
-                <span className="text-xs">{msg.author?.username?.charAt(0)?.toUpperCase() ?? "?"}</span>
+      <div ref={listRef} className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+        {messages.map((msg) => {
+          const myReaction = msg.reactions?.find((r: any) => r.userId === user.id);
+
+          return (
+            <div key={msg.id} className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition">
+              <div className="flex items-center gap-2 mb-1">
+                <b>{msg.author?.username}</b>
+                <small className="text-white/50">
+                  {new Date(msg.createdAt).toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit" })}
+                </small>
+
+                {/* EDIT BUTTON */}
+                {msg.authorId === user.id && (
+                  <button
+                    onClick={() => startEdit(msg)}
+                    className="text-xs text-blue-300 hover:text-blue-200"
+                    title="Szerkesztés"
+                  >
+                    ✏️
+                  </button>
+                )}
+              </div>
+
+              <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
+
+              {/* EDITED LABEL */}
+              {msg.edited && (
+                <small className="text-white/40 text-[10px]">szerkesztve</small>
+              )}
+
+              {/* REACTIONS */}
+              <div className="flex gap-1 mt-1">
+                {REACTIONS.map((emoji) => {
+                  const active = myReaction?.emoji === emoji;
+                  return (
+                    <button
+                      key={emoji}
+                      onClick={() => toggleReaction(msg.id, emoji)}
+                      className={`text-sm px-1 rounded transition ${
+                        active ? "bg-lime-500/40" : "hover:bg-white/20"
+                      }`}
+                    >
+                      {emoji}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* SHOW COUNTS */}
+              {msg.reactions?.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-1 text-xs">
+                  {msg.reactions.map((r: any, i: number) => (
+                    <span key={i} className="px-1 rounded bg-white/20">
+                      {r.emoji} x{r.count}
+                    </span>
+                  ))}
+                </div>
               )}
             </div>
-
-            <div className="flex-1">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-sm">{msg.author?.username}</span>
-                {msg.author?.role === "MODERATOR" && (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-lime-500/80 text-black">MOD</span>
-                )}
-                <span className="text-[11px] text-white/50">
-                  {new Date(msg.createdAt).toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit" })}
-                </span>
-              </div>
-              <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
-            </div>
-
-            {(user.role === "ADMIN" || user.role === "MODERATOR" || msg.authorId === user.id) && (
-              <button
-                onClick={() => deleteMsg(msg.id)}
-                className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 transition"
-                title="Törlés"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
+
+      {typingUser && (
+        <div className="p-2 text-sm text-white/70 italic">
+          💬 {typingUser} éppen ír...
+        </div>
+      )}
 
       <div className="border-t border-white/20 p-4 flex gap-2">
         <input
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            sendTyping();
+          }}
           onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())}
           placeholder="Írj üzenetet..."
           className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
@@ -258,6 +398,33 @@ function GlobalChat({ user }: { user: any }) {
           <Send className="w-4 h-4" /> Küldés
         </button>
       </div>
+
+      {/* EDIT POPUP */}
+      {editMessage && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-white/10 border border-white/20 backdrop-blur-xl p-4 rounded-2xl w-80">
+            <h3 className="font-semibold mb-2">Üzenet szerkesztése</h3>
+
+            <textarea
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              className="w-full bg-black/30 p-2 rounded-lg"
+            />
+
+            <div className="flex justify-end gap-2 mt-2">
+              <button onClick={() => setEditMessage(null)} className="text-white/70 hover:text-white">
+                Mégse
+              </button>
+              <button
+                onClick={saveEdit}
+                className="bg-lime-500 px-3 py-1 rounded text-black"
+              >
+                Mentés
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -267,8 +434,16 @@ export default function ForumUI() {
   const { user, loading, refreshUser } = useUser();
   const router = useRouter();
   const ws = useWebSocket();
+
   const [globalText, setGlobalText] = useState("");
   const [sending, setSending] = useState(false);
+
+  // Avatar cropper state
+  const [showCropper, setShowCropper] = useState(false);
+  const [cropSrc, setCropSrc] = useState<string | null>(null);
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState<any>(null);
 
   function sendGlobalMessage() {
     if (!globalText.trim()) return;
@@ -333,12 +508,56 @@ export default function ForumUI() {
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [unreadDM, setUnreadDM] = useState(0);
 
+  // Online users
+  const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
+
   // UI state
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [newReply, setNewReply] = useState("");
   const [showNewTopicPopup, setShowNewTopicPopup] = useState(false);
   const [newTopicTitle, setNewTopicTitle] = useState("");
   const [newTopicBody, setNewTopicBody] = useState("");
+
+  // WS: presence + DM
+  useEffect(() => {
+    if (!ws) return;
+
+    function onMessage(ev: MessageEvent) {
+      try {
+        const data = JSON.parse(ev.data);
+
+        if (data.type === "presence_snapshot") {
+          setOnlineUsers(Array.isArray(data.users) ? data.users : []);
+          return;
+        }
+
+        if (data.type === "presence_update") {
+          setOnlineUsers((prev) => {
+            const set = new Set(prev);
+            if (data.status === "online") set.add(data.userId);
+            else if (data.status === "offline") set.delete(data.userId);
+            return Array.from(set);
+          });
+          return;
+        }
+
+        if (data.type === "dm_message") {
+          const m = data.message;
+          if (activeDM && (m.fromId === activeDM || m.toId === activeDM)) {
+            setDMMessages((prev: any[]) => [...prev, m]);
+          }
+          loadDMUsers();
+          loadUnreadCounts();
+          return;
+        }
+      } catch (e) {
+        console.error("WS parse error", e);
+      }
+    }
+
+    ws.addEventListener("message", onMessage);
+    return () => ws.removeEventListener("message", onMessage);
+  }, [ws, activeDM]);
 
   // ------------------------- Fetchers -------------------------
   const loadCategories = async () => {
@@ -400,25 +619,23 @@ export default function ForumUI() {
     }
   };
 
-  const sendMessage = async () => {
-    if (!dmText || !activeDM) return;
+  const sendMessage = () => {
+    if (!dmText || !activeDM || !ws) return;
     const text = dmText;
     setDMText("");
 
-    try {
-      await fetch("/api/dm/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toId: activeDM, text }),
-      });
-      loadConversation(activeDM);
-      loadDMUsers();
-    } catch (err) {
-      console.error("Failed to send message:", err);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "dm_message", toId: activeDM, text }));
+      return;
     }
+
+    fetch("/api/dm/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ toId: activeDM, text }),
+    }).then(() => loadConversation(activeDM));
   };
 
-  // Global Chat functions
   const loadChatMessages = async () => {
     setChatLoading(true);
     try {
@@ -447,7 +664,7 @@ export default function ForumUI() {
       loadChatMessages();
     } catch (err) {
       console.error("Failed to send chat message:", err);
-      setChatText(text); // Restore text on error
+      setChatText(text);
     }
   };
 
@@ -462,7 +679,6 @@ export default function ForumUI() {
     }
   };
 
-  // Notifications functions
   const loadNotifications = async () => {
     setNotifLoading(true);
     try {
@@ -501,7 +717,6 @@ export default function ForumUI() {
     }
   };
 
-  // Load unread counts
   const loadUnreadCounts = async () => {
     try {
       const res = await fetch("/api/unread-counts");
@@ -515,7 +730,6 @@ export default function ForumUI() {
     }
   };
 
-  // User search
   const handleUserSearch = async (text: string) => {
     setSearchDMText(text);
     if (!text) {
@@ -534,16 +748,16 @@ export default function ForumUI() {
     }
   };
 
-useEffect(() => {
-  if (!user) return;
+  useEffect(() => {
+    if (!user) return;
 
-  setProfileUsername(user.username || "");
-  setProfileEmail(user.email || "");
-  loadUnreadCounts();
+    setProfileUsername(user.username || "");
+    setProfileEmail(user.email || "");
+    loadUnreadCounts();
 
-  const interval = setInterval(loadUnreadCounts, 30000);
-  return () => clearInterval(interval);
-}, [user]);
+    const interval = setInterval(loadUnreadCounts, 30000);
+    return () => clearInterval(interval);
+  }, [user]);
 
   useEffect(() => {
     if (activePage === "dm") {
@@ -565,59 +779,58 @@ useEffect(() => {
     loadThreads();
   }, [selectedCategory]);
 
-useEffect(() => {
-  if (!activeThread) return;
-  loadThread(activeThread.id);
-}, [activeThread?.id]);
+  useEffect(() => {
+    if (!activeThread) return;
+    loadThread(activeThread.id);
+  }, [activeThread?.id]);
 
-useEffect(() => {
-  if (showNewTopicPopup && categories.length > 0) {
-    setSelectedCategory(categories[0].id);
-  }
-}, [showNewTopicPopup, categories]);
+  useEffect(() => {
+    if (showNewTopicPopup && categories.length > 0) {
+      setSelectedCategory(categories[0].id);
+    }
+  }, [showNewTopicPopup, categories]);
 
   // ------------------------- Actions -------------------------
   const handleAddReply = async () => {
-  if (!newReply.trim()) return;
+    if (!newReply.trim() || !activeThread) return;
 
-  try {
-    await fetch("/api/posts", {
+    try {
+      await fetch("/api/posts", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          threadId: activeThread.id,
+          text: newReply,
+        }),
+      });
+
+      setNewReply("");
+      loadThread(activeThread.id);
+    } catch (err) {
+      console.error("Failed to add reply:", err);
+    }
+  };
+
+  const handleAddTopic = async () => {
+    if (!newTopicTitle.trim() || !selectedCategory || selectedCategory === "all") return;
+
+    await fetch("/api/threads", {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        threadId: activeThread.id,
-        text: newReply,
+        title: newTopicTitle,
+        excerpt: newTopicBody,
+        categoryId: selectedCategory,
       }),
     });
 
-    setNewReply("");
-    loadThread(activeThread.id);
-  } catch (err) {
-    console.error("Failed to add reply:", err);
-  }
-};
-
-
-  const handleAddTopic = async () => {
-  if (!newTopicTitle.trim() || !selectedCategory) return;
-
-  await fetch("/api/threads", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      title: newTopicTitle,
-      excerpt: newTopicBody,
-      categoryId: selectedCategory,
-    }),
-  });
-
-  setShowNewTopicPopup(false);
-  setNewTopicBody("");
-  setNewTopicTitle("");
-  loadThreads();
-};
+    setShowNewTopicPopup(false);
+    setNewTopicBody("");
+    setNewTopicTitle("");
+    loadThreads();
+  };
 
   const toggleLike = async (postId: string) => {
     try {
@@ -626,7 +839,7 @@ useEffect(() => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ postId }),
       });
-      loadThread(activeThread.id);
+      if (activeThread) loadThread(activeThread.id);
     } catch (err) {
       console.error("Failed to toggle like:", err);
     }
@@ -665,7 +878,8 @@ useEffect(() => {
     }
   };
 
-  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // avatar file input -> csak cropper nyitás
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -677,11 +891,25 @@ useEffect(() => {
     setProfileError(null);
     setProfileSuccess(null);
 
-    try {
-      const formData = new FormData();
-      formData.append("avatar", file);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setCropSrc(reader.result as string);
+      setCrop({ x: 0, y: 0 });
+      setZoom(1);
+      setShowCropper(true);
+    };
+    reader.readAsDataURL(file);
+  };
 
-      const res = await fetch("/api/profile/avatar", {
+  const handleCropSave = async () => {
+    if (!cropSrc || !croppedAreaPixels) return;
+
+    try {
+      const blob = await getCroppedImg(cropSrc, croppedAreaPixels);
+      const formData = new FormData();
+      formData.append("avatar", blob, "avatar.png");
+
+      const res = await fetch("/api/avatar/upload", {
         method: "POST",
         body: formData,
       });
@@ -692,6 +920,8 @@ useEffect(() => {
       }
 
       setProfileSuccess("Avatar sikeresen frissítve.");
+      setShowCropper(false);
+      setCropSrc(null);
       await refreshUser();
     } catch (err: any) {
       console.error(err);
@@ -699,14 +929,27 @@ useEffect(() => {
     }
   };
 
+  const handleCropCancel = () => {
+    setShowCropper(false);
+    setCropSrc(null);
+  };
+
   // ------------------------- Render -------------------------
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-900 via-green-800 to-emerald-900 text-white">
+        Betöltés...
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen w-full flex-col md:flex-row bg-gradient-to-br from-green-900 via-green-800 to-emerald-900 text-white">
-      <Sidebar 
-        activePage={activePage} 
-        setActivePage={setActivePage} 
-        unreadNotifications={unreadNotifications} 
-        unreadDM={unreadDM} 
+      <Sidebar
+        activePage={activePage}
+        setActivePage={setActivePage}
+        unreadNotifications={unreadNotifications}
+        unreadDM={unreadDM}
       />
 
       <div className="flex-1 p-4 md:p-6 flex flex-col gap-6">
@@ -727,7 +970,9 @@ useEffect(() => {
                 </button>
               </div>
               <button
-                className={`justify-start text-white hover:bg-white/20 px-4 py-2 rounded-lg transition ${selectedCategory === "all" ? "bg-white/20" : ""}`}
+                className={`justify-start text-white hover:bg-white/20 px-4 py-2 rounded-lg transition ${
+                  selectedCategory === "all" ? "bg-white/20" : ""
+                }`}
                 onClick={() => setSelectedCategory("all")}
               >
                 Összes
@@ -735,7 +980,9 @@ useEffect(() => {
               {categories.map((cat) => (
                 <button
                   key={cat.id}
-                  className={`justify-start text-white hover:bg-white/20 px-4 py-2 rounded-lg transition ${selectedCategory === cat.id ? "bg-white/20" : ""}`}
+                  className={`justify-start text-white hover:bg-white/20 px-4 py-2 rounded-lg transition ${
+                    selectedCategory === cat.id ? "bg-white/20" : ""
+                  }`}
                   onClick={() => setSelectedCategory(cat.id)}
                 >
                   {cat.name}
@@ -757,11 +1004,19 @@ useEffect(() => {
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1">
-                            <h3 className="text-lg md:text-xl font-semibold mb-1">{thread.title}</h3>
-                            <p className="text-white/80 text-sm md:text-base mb-2">{thread.excerpt}</p>
+                            <h3 className="text-lg md:text-xl font-semibold mb-1">
+                              {thread.title}
+                            </h3>
+                            <p className="text-white/80 text-sm md:text-base mb-2">
+                              {thread.excerpt}
+                            </p>
                             <div className="flex flex-wrap gap-3 text-[11px] md:text-xs text-white/70">
                               <span>Szerző: {thread.author.username}</span>
-                              {thread.isPinned && <span className="text-lime-300 flex items-center gap-1"><Pin className="w-3 h-3" /> Kiemelt</span>}
+                              {thread.isPinned && (
+                                <span className="text-lime-300 flex items-center gap-1">
+                                  <Pin className="w-3 h-3" /> Kiemelt
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -776,8 +1031,8 @@ useEffect(() => {
 
               {activeThread && (
                 <div className="flex flex-col gap-4">
-                  <button 
-                    className="text-xs md:text-sm text-white/70 hover:text-white mb-2 self-start" 
+                  <button
+                    className="text-xs md:text-sm text-white/70 hover:text-white mb-2 self-start"
                     onClick={() => setActiveThread(null)}
                   >
                     ← Vissza a listához
@@ -785,10 +1040,16 @@ useEffect(() => {
 
                   <div className="bg-white/10 border border-white/20 rounded-2xl p-4">
                     <h2 className="text-xl md:text-2xl font-bold mb-1">{activeThread.title}</h2>
-                    <p className="text-white/80 text-sm md:text-base mb-2">{activeThread.excerpt}</p>
+                    <p className="text-white/80 text-sm md:text-base mb-2">
+                      {activeThread.excerpt}
+                    </p>
                     <div className="flex flex-wrap gap-3 text-[11px] md:text-xs text-white/70">
                       <span>Szerző: {activeThread.author.username}</span>
-                      {activeThread.isPinned && <span className="text-lime-300 flex items-center gap-1"><Pin className="w-3 h-3" /> Kiemelt</span>}
+                      {activeThread.isPinned && (
+                        <span className="text-lime-300 flex items-center gap-1">
+                          <Pin className="w-3 h-3" /> Kiemelt
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -801,12 +1062,18 @@ useEffect(() => {
                               {p.author.avatarUrl ? (
                                 <img src={p.author.avatarUrl} className="w-full h-full object-cover" alt="" />
                               ) : (
-                                <span className="text-[10px]">{p.author.username.charAt(0).toUpperCase()}</span>
+                                <span className="text-[10px]">
+                                  {p.author.username.charAt(0).toUpperCase()}
+                                </span>
                               )}
                             </div>
-                            <span className="font-semibold text-xs md:text-sm">{p.author.username}</span>
+                            <span className="font-semibold text-xs md:text-sm">
+                              {p.author.username}
+                            </span>
                             {p.author.role === "MODERATOR" && (
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-lime-500/80 text-black">MOD</span>
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-lime-500/80 text-black">
+                                MOD
+                              </span>
                             )}
                           </div>
                         </div>
@@ -835,7 +1102,7 @@ useEffect(() => {
                       className="bg-white/20 text-white placeholder:text-white/60 rounded-xl p-3 text-sm md:text-base min-h-[80px] border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
                     />
                     <div className="flex justify-end">
-                      <button 
+                      <button
                         onClick={handleAddReply}
                         className="bg-lime-500 hover:bg-lime-600 text-black px-4 py-2 rounded-lg font-semibold transition"
                       >
@@ -849,75 +1116,83 @@ useEffect(() => {
           </div>
         )}
 
+        {/* ------- Global Chat Page ------- */}
+        {activePage === "chat" && (
+          <GlobalChat user={user} messages={chatMessages} setMessages={setChatMessages} />
+        )}
+
         {/* ------- DM Page ------- */}
         {activePage === "dm" && (
           <div className="flex w-full h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
+            {/* DM Sidebar */}
             <div className="w-1/3 border-r border-white/20 p-4 flex flex-col gap-3 overflow-y-auto">
-              <h2 className="text-lg font-bold mb-2">Privát üzenetek</h2>
-
-              {dmLoading && <p className="text-white/60 text-sm">Betöltés...</p>}
-
-              {!dmLoading && dmUsers.length === 0 && (
-                <p className="text-white/60 text-sm">Nincs beszélgetésed.</p>
-              )}
-
-              {dmUsers.map((u) => (
-                <button
-                  key={u.userId}
-                  onClick={() => loadConversation(u.userId)}
-                  className={`flex items-center gap-3 p-2 rounded-lg transition ${
-                    activeDM === u.userId ? "bg-white/20" : "hover:bg-white/10"
-                  }`}
-                >
-                  <div className="w-10 h-10 rounded-full bg-white/20 overflow-hidden flex items-center justify-center flex-shrink-0">
-                    {u.avatarUrl ? (
-                      <img src={u.avatarUrl} className="w-full h-full object-cover" alt="" />
-                    ) : (
-                      <span>{u.username.charAt(0).toUpperCase()}</span>
-                    )}
-                  </div>
-                  <div className="flex flex-col text-left flex-1 min-w-0">
-                    <span className="text-sm font-semibold">{u.username}</span>
-                    <span className="text-xs text-white/60 truncate">
-                      {u.lastMessage}
-                    </span>
-                  </div>
-                </button>
-              ))}
-
               <input
                 value={searchDMText}
                 onChange={(e) => handleUserSearch(e.target.value)}
                 placeholder="Felhasználó keresése..."
-                className="bg-white/20 text-white placeholder:text-white/60 text-sm px-3 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+                className="bg-white/20 text-white placeholder:text-white/60 rounded-lg px-3 py-2 text-sm border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
               />
 
               {searchUsers.length > 0 && (
-                <div className="flex flex-col border-t border-white/20 pt-2 mt-2">
-                  {searchUsers.map((u) => (
+                <div className="flex flex-col gap-2">
+                  {searchUsers.map((u: any) => (
                     <button
                       key={u.id}
-                      onClick={() => {
-                        setSearchDMText("");
-                        setSearchUsers([]);
-                        loadConversation(u.id);
-                      }}
-                      className="flex items-center gap-3 p-2 hover:bg-white/10 rounded-lg"
+                      onClick={() => loadConversation(u.id)}
+                      className="p-2 rounded-lg bg-white/10 hover:bg-white/20 flex items-center gap-3 transition text-sm"
                     >
-                      <div className="w-10 h-10 rounded-full bg-white/20 overflow-hidden flex items-center justify-center">
+                      <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
                         {u.avatarUrl ? (
                           <img src={u.avatarUrl} className="w-full h-full object-cover" alt="" />
                         ) : (
-                          <span>{u.username.charAt(0).toUpperCase()}</span>
+                          u.username.charAt(0).toUpperCase()
                         )}
                       </div>
-                      <span className="text-sm">{u.username}</span>
+                      <span>{u.username}</span>
+
+                      {onlineUsers.includes(u.id) && (
+                        <span className="ml-auto w-2 h-2 rounded-full bg-lime-400" />
+                      )}
                     </button>
                   ))}
                 </div>
               )}
+
+              <div className="flex flex-col gap-2">
+                {dmLoading ? (
+                  <p className="text-sm text-white/60">Betöltés...</p>
+                ) : dmUsers.length === 0 ? (
+                  <p className="text-sm text-white/60">Nincsenek beszélgetések.</p>
+                ) : (
+                  dmUsers.map((u: any) => (
+                    <button
+                      key={u.id}
+                      onClick={() => loadConversation(u.id)}
+                      className={`p-2 rounded-lg flex items-center gap-3 transition text-sm ${
+                        activeDM === u.id
+                          ? "bg-lime-500/50 text-black"
+                          : "bg-white/10 hover:bg-white/20"
+                      }`}
+                    >
+                      <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
+                        {u.avatarUrl ? (
+                          <img src={u.avatarUrl} className="w-full h-full object-cover" alt="" />
+                        ) : (
+                          u.username.charAt(0).toUpperCase()
+                        )}
+                      </div>
+                      <span>{u.username}</span>
+
+                      {onlineUsers.includes(u.id) && (
+                        <span className="ml-auto w-2 h-2 rounded-full bg-lime-400" />
+                      )}
+                    </button>
+                  ))
+                )}
+              </div>
             </div>
 
+            {/* DM Conversation */}
             <div className="flex-1 flex flex-col">
               {!activeDM && (
                 <div className="flex flex-1 items-center justify-center text-white/70 text-sm">
@@ -942,30 +1217,30 @@ useEffect(() => {
                     ))}
                   </div>
 
-                  <div className="border-t border-white/20 p-3 flex gap-2">
-  <input
-    value={globalText}
-    onChange={(e) => setGlobalText(e.target.value)}
-    onKeyDown={(e) => e.key === "Enter" && sendGlobalMessage()}
-    disabled={sending}
-    placeholder="Írj üzenetet..."
-    className="flex-1 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400 disabled:opacity-50"
-  />
+                  <div className="border-t border-white/20 p-4 flex gap-2">
+                    <input
+                      value={dmText}
+                      onChange={(e) => setDMText(e.target.value)}
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())
+                      }
+                      placeholder="Írj üzenetet..."
+                      className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+                    />
 
-  <button
-    onClick={sendGlobalMessage}
-    disabled={sending}
-    className="bg-lime-500 hover:bg-lime-600 disabled:bg-lime-800 disabled:cursor-not-allowed text-black px-4 py-2 rounded-lg font-semibold transition"
-  >
-    {sending ? "Küldés..." : "Küldés"}
-  </button>
-</div>
+                    <button
+                      onClick={sendMessage}
+                      disabled={!dmText.trim()}
+                      className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition"
+                    >
+                      <Send className="w-4 h-4" /> Küldés
+                    </button>
+                  </div>
                 </>
               )}
             </div>
           </div>
         )}
-      
 
         {/* ------- Notifications Page ------- */}
         {activePage === "notifications" && (
@@ -974,7 +1249,7 @@ useEffect(() => {
               <div>
                 <h2 className="text-xl font-bold">Értesítések</h2>
                 <p className="text-sm text-white/70">
-                  {notifications.filter(n => !n.isRead).length} olvasatlan értesítés
+                  {notifications.filter((n) => !n.isRead).length} olvasatlan értesítés
                 </p>
               </div>
               {notifications.length > 0 && (
@@ -1018,12 +1293,10 @@ useEffect(() => {
                             <p className="text-sm font-semibold mb-1">{notif.title}</p>
                             <p className="text-sm text-white/80 mb-2">{notif.message}</p>
                             <span className="text-[11px] text-white/50">
-                              {new Date(notif.createdAt).toLocaleString('hu-HU')}
+                              {new Date(notif.createdAt).toLocaleString("hu-HU")}
                             </span>
                           </div>
-                          {!notif.isRead && (
-                            <div className="w-2 h-2 rounded-full bg-lime-400"></div>
-                          )}
+                          {!notif.isRead && <div className="w-2 h-2 rounded-full bg-lime-400"></div>}
                         </div>
                       </div>
                     ))}
@@ -1035,24 +1308,58 @@ useEffect(() => {
         )}
 
         {/* ------- Profile Page ------- */}
-        {activePage === "profile" && (
+        {activePage === "profile" && user && (
           <div className="flex flex-col md:flex-row gap-6 h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-6">
+            {/* LEFT: Avatar */}
             <div className="w-full md:w-1/3 flex flex-col items-center text-center gap-4">
-              <div className="w-24 h-24 md:w-32 md:h-32 rounded-full bg-white/20 overflow-hidden flex items-center justify-center text-3xl md:text-4xl">
+              <div
+                className="relative w-24 h-24 md:w-32 md:h-32 rounded-full bg-white/20 overflow-hidden flex items-center justify-center text-3xl md:text-4xl cursor-pointer group"
+                onClick={() => document.getElementById("avatarInput")?.click()}
+              >
                 {user.avatarUrl ? (
                   <img src={user.avatarUrl} className="w-full h-full object-cover" alt="Avatar" />
                 ) : (
                   (user?.username?.charAt(0)?.toUpperCase() ?? "?")
                 )}
+                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-xs md:text-sm">
+                  Avatar módosítása
+                </div>
               </div>
+
               <div>
                 <p className="text-xl md:text-2xl font-bold">{user.username}</p>
                 <p className="text-lime-300 text-sm md:text-base">
-                  {user.role === "MODERATOR" ? "Moderátor" : user.role === "ADMIN" ? "Admin" : "Felhasználó"}
+                  {user.role === "MODERATOR"
+                    ? "Moderátor"
+                    : user.role === "ADMIN"
+                    ? "Admin"
+                    : "Felhasználó"}
                 </p>
+                <p className="text-xs md:text-sm text-white/70 mt-1">
+                  {onlineUsers.includes(user.id) ? "🟢 Online" : "⚫ Offline"}
+                </p>
+              </div>
+
+              {/* Rejtett / kicsi input + gomb */}
+              <div className="flex flex-col items-center gap-2 text-sm">
+                <input
+                  id="avatarInput"
+                  type="file"
+                  accept="image/*"
+                  onChange={handleAvatarChange}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => document.getElementById("avatarInput")?.click()}
+                  className="px-4 py-2 rounded-lg bg-white/20 hover:bg-white/30 border border-white/30"
+                >
+                  Új avatar feltöltése
+                </button>
+                <p className="text-[11px] text-white/60">Max 2MB · katt a képre is működik</p>
               </div>
             </div>
 
+            {/* RIGHT: Settings */}
             <div className="flex-1 flex flex-col gap-4 text-sm md:text-base">
               <div className="bg-white/10 border-white/20 border p-4 rounded-2xl">
                 <h3 className="font-semibold mb-3">Profil adatok szerkesztése</h3>
@@ -1095,17 +1402,6 @@ useEffect(() => {
                     />
                   </div>
 
-                  <div>
-                    <label className="text-white/80 text-sm">Avatar feltöltése</label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleAvatarChange}
-                      className="w-full bg-white/20 text-white p-2 rounded-lg text-xs border border-white/20"
-                    />
-                    <p className="text-[11px] text-white/60 mt-1">Max 2MB</p>
-                  </div>
-
                   <div className="flex justify-end">
                     <button
                       onClick={handleSaveProfile}
@@ -1133,70 +1429,123 @@ useEffect(() => {
             </div>
           </div>
         )}
+
+        {/* ------- New Topic Modal ------- */}
+        {showNewTopicPopup && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
+            <div className="bg-white/10 border border-white/20 backdrop-blur-xl p-6 rounded-2xl w-full max-w-md shadow-xl">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-semibold text-white">Új téma hozzáadása</h3>
+                <button
+                  onClick={() => setShowNewTopicPopup(false)}
+                  className="text-white/70 hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <input
+                value={newTopicTitle}
+                onChange={(e) => setNewTopicTitle(e.target.value)}
+                placeholder="Téma címe..."
+                className="w-full mb-3 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+              />
+
+              <textarea
+                value={newTopicBody}
+                onChange={(e) => setNewTopicBody(e.target.value)}
+                placeholder="Leírás..."
+                className="w-full mb-4 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400 min-h-[100px]"
+              />
+
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="w-full mb-4 bg-white/20 text-white px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+              >
+                <option value="all" disabled>
+                  Válassz kategóriát...
+                </option>
+                {categories.map((cat) => (
+                  <option key={cat.id} value={cat.id}>
+                    {cat.name}
+                  </option>
+                ))}
+              </select>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  className="text-white hover:bg-white/10 px-4 py-2 rounded-lg transition"
+                  onClick={() => setShowNewTopicPopup(false)}
+                >
+                  Mégse
+                </button>
+                <button
+                  className="bg-lime-500 hover:bg-lime-600 text-black px-4 py-2 rounded-lg font-semibold transition"
+                  onClick={handleAddTopic}
+                >
+                  Hozzáadás
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ------- Avatar Cropper Modal ------- */}
+        {showCropper && cropSrc && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center z-50 p-4">
+            <div className="bg-neutral-900 border border-white/20 rounded-2xl p-4 w-full max-w-lg">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold">Avatar kivágása</h3>
+                <button onClick={handleCropCancel} className="text-white/70 hover:text-white">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="relative w-full h-64 bg-black rounded-xl overflow-hidden">
+                <Cropper
+                  image={cropSrc}
+                  crop={crop}
+                  zoom={zoom}
+                  aspect={1}
+                  showGrid={false}
+                  onCropChange={setCrop}
+                  onZoomChange={setZoom}
+                  onCropComplete={(_, areaPixels) => setCroppedAreaPixels(areaPixels)}
+                />
+              </div>
+
+              <div className="mt-4 flex items-center gap-3">
+                <span className="text-xs text-white/70 w-16">Zoom</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={3}
+                  step={0.1}
+                  value={zoom}
+                  onChange={(e) => setZoom(Number(e.target.value))}
+                  className="flex-1"
+                />
+              </div>
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  onClick={handleCropCancel}
+                  className="px-4 py-2 text-sm rounded-lg border border-white/30 hover:bg-white/10"
+                >
+                  Mégse
+                </button>
+                <button
+                  onClick={handleCropSave}
+                  className="px-4 py-2 text-sm rounded-lg bg-lime-500 hover:bg-lime-600 text-black font-semibold"
+                >
+                  Mentés
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-
-      {/* Modal: New Topic */}
-{showNewTopicPopup && (
-  <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
-    <div className="bg-white/10 border border-white/20 backdrop-blur-xl p-6 rounded-2xl w-full max-w-md shadow-xl">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-xl font-semibold text-white">Új téma hozzáadása</h3>
-        <button
-          onClick={() => setShowNewTopicPopup(false)}
-          className="text-white/70 hover:text-white"
-        >
-          <X className="w-5 h-5" />
-        </button>
-      </div>
-
-      {/* Title */}
-      <input
-        value={newTopicTitle}
-        onChange={(e) => setNewTopicTitle(e.target.value)}
-        placeholder="Téma címe..."
-        className="w-full mb-3 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-      />
-
-      {/* Body */}
-      <textarea
-        value={newTopicBody}
-        onChange={(e) => setNewTopicBody(e.target.value)}
-        placeholder="Leírás..."
-        className="w-full mb-4 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400 min-h-[100px]"
-      />
-
-      {/* Category Select */}
-      <select
-        value={selectedCategory}
-        onChange={(e) => setSelectedCategory(e.target.value)}
-        className="w-full mb-4 bg-white/20 text-white px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-      >
-        <option value="all" disabled>Válassz kategóriát...</option>
-        {categories.map((cat) => (
-          <option key={cat.id} value={cat.id}>
-            {cat.name}
-          </option>
-        ))}
-      </select>
-
-      {/* Buttons */}
-      <div className="flex justify-end gap-2">
-        <button 
-          className="text-white hover:bg-white/10 px-4 py-2 rounded-lg transition" 
-          onClick={() => setShowNewTopicPopup(false)}
-        >
-          Mégse
-        </button>
-        <button 
-          className="bg-lime-500 hover:bg-lime-600 text-black px-4 py-2 rounded-lg font-semibold transition" 
-          onClick={handleAddTopic}
-        >
-          Hozzáadás
-        </button>
-      </div>
-    </div>
-  </div>
-)}
     </div>
   );
 }

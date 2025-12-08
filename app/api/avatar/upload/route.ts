@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
+import path from "path";
+import { promises as fs } from "fs";
+import { v4 as uuid } from "uuid";
 
 export const runtime = "nodejs";
 
@@ -25,16 +28,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const allowedExt = [".png", ".jpg", ".jpeg", ".webp"];
-  const fileName = file.name.toLowerCase();
-  if (!allowedExt.some(ext => fileName.endsWith(ext))) {
-    return NextResponse.json(
-      { error: "A fájl kiterjesztése nem támogatott" },
-      { status: 400 }
-    );
-  }
-
-  const maxSize = 2 * 1024 * 1024; // 2MB
+  const maxSize = 2 * 1024 * 1024;
   if (file.size > maxSize) {
     return NextResponse.json(
       { error: "A fájl mérete nem lehet nagyobb, mint 2MB" },
@@ -43,29 +37,26 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const base64 = buffer.toString("base64");
-    const dataUrl = `data:${file.type};base64,${base64}`;
+    const bytes = await file.arrayBuffer();
+    const buffer = Buffer.from(bytes);
 
-    const updated = await prisma.user.update({
+    const fileName = uuid() + ".jpg";
+    const uploadDir = path.join(process.cwd(), "public", "avatars");
+    await fs.mkdir(uploadDir, { recursive: true });
+
+    const filePath = path.join(uploadDir, fileName);
+    await fs.writeFile(filePath, buffer);
+
+    const avatarUrl = `/avatars/${fileName}`;
+
+    await prisma.user.update({
       where: { id: authUser.id },
-      data: { avatarUrl: dataUrl },
-      select: {
-        id: true,
-        username: true,
-        email: true,
-        avatarUrl: true,
-        role: true,
-        joinedAt: true,
-      },
+      data: { avatarUrl },
     });
 
-    return NextResponse.json({ user: updated });
+    return NextResponse.json({ avatarUrl });
   } catch (err) {
     console.error(err);
-    return NextResponse.json(
-      { error: "Nem sikerült az avatar frissítése." },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Hiba az avatar mentése közben." }, { status: 500 });
   }
 }

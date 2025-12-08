@@ -30,6 +30,7 @@ model User {
   notifications Notification[]
   dmSent        DMMessage[]      @relation("DMFrom")
   dmReceived    DMMessage[]      @relation("DMTo")
+  ChatReactions ChatReaction[]
 
   @@index([email])
   @@index([username])
@@ -102,12 +103,25 @@ model ChatMessage {
   text      String   @db.Text
   createdAt DateTime @default(now())
   authorId  String
+  reactions ChatReaction[]
   
   // Relations
   author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
 
   @@index([authorId])
   @@index([createdAt])
+}
+
+model ChatReaction {
+  id        String   @id @default(cuid())
+  message   ChatMessage @relation(fields: [messageId], references: [id])
+  messageId String
+  user      User @relation(fields: [userId], references: [id])
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId, emoji], name: "userReactionUnique")
 }
 
 model DMMessage {
