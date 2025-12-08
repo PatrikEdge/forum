@@ -5,7 +5,7 @@ import { parseAuthToken } from "./auth";
 const clients = new Map<string, WebSocket>();
 
 export function createWSServer(server: any) {
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({ noServer: true });
 
   wss.on("connection", async (socket, req) => {
     try {

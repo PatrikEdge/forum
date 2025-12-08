@@ -12,8 +12,9 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     const socket = new WebSocket(process.env.NEXT_PUBLIC_WS_URL!);
 
     socket.onopen = () => {
-      retry.current = 1000;
       console.log("WS Connected");
+      retry.current = 1000;
+      setWs(socket);
     };
 
     socket.onclose = () => {
@@ -24,8 +25,6 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     socket.onerror = () => {
       socket.close();
     };
-
-    setWs(socket);
   }
 
   function reconnect() {

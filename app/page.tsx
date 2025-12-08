@@ -183,7 +183,6 @@ function Topbar({ user }: any) {
   );
 }
 
-// ================== GLOBAL CHAT COMPONENT ==================
 function GlobalChat({ user, messages, setMessages }: { 
   user: any, 
   messages: any[], 
@@ -193,7 +192,7 @@ function GlobalChat({ user, messages, setMessages }: {
   const [text, setText] = useState("");
   const [typingUser, setTypingUser] = useState<string | null>(null);
 
-  // ---- Edit state ----
+  // ---- Edit ----
   const [editMessage, setEditMessage] = useState<any>(null);
   const [editText, setEditText] = useState("");
 
@@ -207,55 +206,58 @@ function GlobalChat({ user, messages, setMessages }: {
     ws.send(JSON.stringify({ type: "typing", chat: "global" }));
   }
 
-  // ---- Reactions ----
+  // ---- Reaction Toggle ----
   function toggleReaction(messageId: string, emoji: string) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "chat_reaction", messageId, emoji }));
   }
 
-  // ---- Editing ----
+  // ---- Start Edit ----
   function startEdit(msg: any) {
     setEditMessage(msg);
     setEditText(msg.text);
   }
 
+  // ---- Save Edit ----
   function saveEdit() {
     if (!editMessage || !editText.trim() || !ws) return;
 
-    ws.send(JSON.stringify({
-      type: "chat_edit",
-      id: editMessage.id,
-      text: editText.trim(),
-    }));
+    ws.send(
+      JSON.stringify({
+        type: "chat_edit",
+        id: editMessage.id,
+        text: editText.trim(),
+      })
+    );
 
     setEditMessage(null);
     setEditText("");
   }
 
-  // WS LISTENER (REACTIONS + EDIT + TYPING)
+  // ---- WebSocket Listener ----
   useEffect(() => {
     if (!ws) return;
 
-    function onMessage(ev: MessageEvent) {
+    const onMessage = (ev: MessageEvent) => {
       try {
         const data = JSON.parse(ev.data);
 
-        // ---- Global message ----
+        // 🟢 Új üzenet
         if (data.type === "global_message") {
           setMessages((prev: any[]) => [...prev, data.message]);
           return;
         }
 
-        // ---- Typing ----
+        // 👀 Valaki ír
         if (data.type === "typing" && data.chat === "global") {
           if (data.userId !== user.id) {
             setTypingUser(data.username);
-            setTimeout(() => setTypingUser(null), 3000);
+            setTimeout(() => setTypingUser(null), 2500);
           }
           return;
         }
 
-        // ---- Reactions ----
+        // 😀 Reakciók frissültek
         if (data.type === "chat_reaction") {
           setMessages((prev) =>
             prev.map((m) =>
@@ -265,62 +267,83 @@ function GlobalChat({ user, messages, setMessages }: {
           return;
         }
 
-        // ---- Edit ----
+        // ✏️ Szerkesztett üzenet
         if (data.type === "chat_edit") {
           setMessages((prev) =>
-            prev.map((m) =>
-              m.id === data.message.id ? data.message : m
-            )
+            prev.map((m) => (m.id === data.message.id ? data.message : m))
           );
           return;
         }
       } catch (e) {
         console.error("WS parse error:", e);
       }
-    }
+    };
 
     ws.addEventListener("message", onMessage);
     return () => ws.removeEventListener("message", onMessage);
   }, [ws, user.id, setMessages]);
 
-  // AUTO-SCROLL
+  // ---- Auto-scroll ----
   useEffect(() => {
     if (!listRef.current) return;
     listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [messages]);
 
-  // SEND MESSAGE
+  // ---- SEND MESSAGE ----
   function handleSend() {
-    if (!text.trim()) return;
+    if (!text.trim() || !ws || ws.readyState !== WebSocket.OPEN) return;
     const msg = text.trim();
     setText("");
 
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "global_message", text: msg }));
-      return;
-    }
+    // Lokális azonnali megjelenítés (offline fallback)
+    const tempId = crypto.randomUUID();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: tempId,
+        text: msg,
+        authorId: user.id,
+        author: user,
+        createdAt: new Date().toISOString(),
+        reactions: [],
+        edited: false,
+      },
+    ]);
+
+    ws.send(
+      JSON.stringify({
+        type: "global_message",
+        text: msg,
+      })
+    );
   }
 
   return (
     <div className="flex flex-col h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
+      {/* HEADER */}
       <div className="border-b border-white/20 p-4">
         <h2 className="text-xl font-bold">🌍 Globális Chat</h2>
         <p className="text-sm text-white/70">Beszélgetés valós időben</p>
       </div>
 
+      {/* MESSAGE LIST */}
       <div ref={listRef} className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
         {messages.map((msg) => {
-          const myReaction = msg.reactions?.find((r: any) => r.userId === user.id);
-
           return (
-            <div key={msg.id} className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition">
+            <div
+              key={msg.id}
+              className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition"
+            >
               <div className="flex items-center gap-2 mb-1">
                 <b>{msg.author?.username}</b>
                 <small className="text-white/50">
-                  {new Date(msg.createdAt).toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit" })}
+                  {new Date(msg.createdAt).toLocaleTimeString("hu-HU", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
                 </small>
 
-                {/* EDIT BUTTON */}
+                {/* Edit button */}
                 {msg.authorId === user.id && (
                   <button
                     onClick={() => startEdit(msg)}
@@ -334,34 +357,29 @@ function GlobalChat({ user, messages, setMessages }: {
 
               <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
 
-              {/* EDITED LABEL */}
+              {/* Edited Label */}
               {msg.edited && (
                 <small className="text-white/40 text-[10px]">szerkesztve</small>
               )}
 
               {/* REACTIONS */}
-              <div className="flex gap-1 mt-1">
-                {REACTIONS.map((emoji) => {
-                  const active = myReaction?.emoji === emoji;
-                  return (
-                    <button
-                      key={emoji}
-                      onClick={() => toggleReaction(msg.id, emoji)}
-                      className={`text-sm px-1 rounded transition ${
-                        active ? "bg-lime-500/40" : "hover:bg-white/20"
-                      }`}
-                    >
-                      {emoji}
-                    </button>
-                  );
-                })}
+              <div className="flex gap-1 mt-2">
+                {REACTIONS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    onClick={() => toggleReaction(msg.id, emoji)}
+                    className="text-sm px-2 py-[1px] rounded-md hover:bg-white/20 transition"
+                  >
+                    {emoji}
+                  </button>
+                ))}
               </div>
 
-              {/* SHOW COUNTS */}
+              {/* REACTION COUNT */}
               {msg.reactions?.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-1 text-xs">
                   {msg.reactions.map((r: any, i: number) => (
-                    <span key={i} className="px-1 rounded bg-white/20">
+                    <span key={i} className="px-2 py-[1px] rounded bg-white/20">
                       {r.emoji} x{r.count}
                     </span>
                   ))}
@@ -372,12 +390,14 @@ function GlobalChat({ user, messages, setMessages }: {
         })}
       </div>
 
+      {/* TYPING */}
       {typingUser && (
         <div className="p-2 text-sm text-white/70 italic">
           💬 {typingUser} éppen ír...
         </div>
       )}
 
+      {/* INPUT BAR */}
       <div className="border-t border-white/20 p-4 flex gap-2">
         <input
           value={text}
@@ -408,16 +428,19 @@ function GlobalChat({ user, messages, setMessages }: {
             <textarea
               value={editText}
               onChange={(e) => setEditText(e.target.value)}
-              className="w-full bg-black/30 p-2 rounded-lg"
+              className="w-full bg-black/30 p-2 rounded-lg text-white border border-white/30"
             />
 
-            <div className="flex justify-end gap-2 mt-2">
-              <button onClick={() => setEditMessage(null)} className="text-white/70 hover:text-white">
+            <div className="flex justify-end gap-2 mt-3">
+              <button
+                onClick={() => setEditMessage(null)}
+                className="text-white/70 hover:text-white"
+              >
                 Mégse
               </button>
               <button
                 onClick={saveEdit}
-                className="bg-lime-500 px-3 py-1 rounded text-black"
+                className="bg-lime-500 px-3 py-1 rounded text-black hover:bg-lime-600"
               >
                 Mentés
               </button>

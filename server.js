@@ -11,10 +11,19 @@ app.prepare().then(() => {
     handle(req, res);
   });
 
-  createWSServer(server);
+  const wss = createWSServer(server);
+
+  server.on("upgrade", (req, socket, head) => {
+    if (req.url === "/ws") {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+      return;
+    }
+  });
 
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, () =>
-    console.log(" Server + WS running on http://localhost:" + PORT)
+    console.log("Server + WS running on http://localhost:" + PORT)
   );
 });
