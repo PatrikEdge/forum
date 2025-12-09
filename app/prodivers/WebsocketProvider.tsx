@@ -8,38 +8,45 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
   const retry = useRef(1000);
 
-  function connect() {
-    const socket = new WebSocket(process.env.NEXT_PUBLIC_WS_URL!);
+function connect() {
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  const url = `${protocol}://${window.location.host}/ws`;
 
-    socket.onopen = () => {
-      console.log("WS Connected");
-      retry.current = 1000;
-      setWs(socket);
-    };
+  const socket = new WebSocket(url);
+  socket.withCredentials = true;
 
-    socket.onclose = () => {
-      console.log("WS Disconnected");
-      reconnect();
-    };
+  socket.onopen = () => {
+    console.log("WS Connected");
+    retry.current = 1000;
+    setWs(socket);
+  };
 
-    socket.onerror = () => {
-      socket.close();
-    };
-  }
+  socket.onclose = () => {
+    console.warn("WS Disconnected");
+    reconnect();
+  };
+
+  socket.onerror = () => {
+    socket.close();
+  };
+}
 
   function reconnect() {
     if (reconnectTimer.current) return;
 
     reconnectTimer.current = setTimeout(() => {
-      connect();
       reconnectTimer.current = null;
       retry.current = Math.min(retry.current * 2, 5000);
+      connect();
     }, retry.current);
   }
 
+  // 👉 Try to connect once
   useEffect(() => {
     connect();
-    return () => ws?.close();
+    return () => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+    };
   }, []);
 
   return <WSContext.Provider value={ws}>{children}</WSContext.Provider>;

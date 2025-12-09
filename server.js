@@ -1,6 +1,7 @@
 const { createServer } = require("http");
 const next = require("next");
 const { createWSServer } = require("./lib/wsServer");
+require("dotenv").config({ path: ".env.local" });
 
 const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });
@@ -14,11 +15,14 @@ app.prepare().then(() => {
   const wss = createWSServer(server);
 
   server.on("upgrade", (req, socket, head) => {
-    if (req.url === "/ws") {
+    const pathname = req.url.split("?")[0];
+
+    if (pathname === "/ws") {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
       });
-      return;
+    } else {
+      socket.destroy();
     }
   });
 

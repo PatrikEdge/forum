@@ -15,6 +15,7 @@ export async function POST(req: NextRequest) {
         { status: 429 }
       );
     }
+    console.log("JWT SECRET (API):", process.env.JWT_SECRET);
 
     const { email, password } = await req.json();
     if (!email || !password) {
@@ -29,18 +30,19 @@ export async function POST(req: NextRequest) {
 
     const token = generateToken({ id: user.id });
     const res = NextResponse.json({
-      user: { id: user.id, username: user.username, email: user.email },
-    });
+  user: { id: user.id, username: user.username, email: user.email },
+  token,
+});
 
     const isProd = process.env.NODE_ENV === "production";
 
-    res.cookies.set("token", token, {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: "strict",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 7, // 7 nap
-    });
+res.cookies.set("token", token, {
+  httpOnly: true,
+  secure: false,
+  sameSite: "lax",
+  path: "/",
+  maxAge: 60 * 60 * 24 * 7,
+});
 
     return res;
   } catch (e) {

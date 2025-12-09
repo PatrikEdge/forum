@@ -10,21 +10,23 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
-    setLoading(true);
-    setError(null);
+  setLoading(true);
+  setError(null);
 
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password })
-    });
+  const res = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+    credentials: "include"
+  });
 
-    const data = await res.json();
-    setLoading(false);
+  const data = await res.json();
+  setLoading(false);
 
-    if (!res.ok) return setError(data.error || "Hiba történt.");
-    router.push("/");
-  };
+  if (!res.ok) return setError(data.error || "Hiba történt.");
+
+  router.push("/");
+};
 
   return (
     <div className="bg-gradient-to-br from-green-900 via-green-800 to-emerald-900 min-h-screen flex items-center justify-center p-4 text-white">

@@ -241,10 +241,25 @@ function GlobalChat({ user, messages, setMessages }: {
     const onMessage = (ev: MessageEvent) => {
       try {
         const data = JSON.parse(ev.data);
-
-        // 🟢 Új üzenet
+        const incomingMessage = data.message;
+        
+        // 🟢 Új üzenet - DEDUBBLIKÁCIÓS LOGIKA
         if (data.type === "global_message") {
-          setMessages((prev: any[]) => [...prev, data.message]);
+          
+          setMessages((prev: any[]) => {
+            // Ellenőrizzük, hogy az üzenet a mi általunk küldött, Local Echo-t felváltó üzenet-e.
+            if (incomingMessage.tempId && user.id === incomingMessage.authorId) {
+                // Lecseréljük az ideiglenes üzenetet a végleges, adatbázisból származó üzenetre
+                return prev.map((m) =>
+                    m.id === incomingMessage.tempId 
+                        ? { ...incomingMessage, id: incomingMessage.id } // Lecseréljük
+                        : m
+                );
+            }
+            
+            // Ha ez egy másik felhasználó üzenete, vagy ha nincs tempId, egyszerűen hozzáadjuk.
+            return [...prev, incomingMessage];
+          });
           return;
         }
 
@@ -281,7 +296,7 @@ function GlobalChat({ user, messages, setMessages }: {
 
     ws.addEventListener("message", onMessage);
     return () => ws.removeEventListener("message", onMessage);
-  }, [ws, user.id, setMessages]);
+  }, [ws, user.id, setMessages]); // user.id hozzáadva dependency-nek
 
   // ---- Auto-scroll ----
   useEffect(() => {
@@ -290,13 +305,14 @@ function GlobalChat({ user, messages, setMessages }: {
   }, [messages]);
 
   // ---- SEND MESSAGE ----
-  function handleSend() {
+// GlobalChat - handleSend
+function handleSend() {
     if (!text.trim() || !ws || ws.readyState !== WebSocket.OPEN) return;
     const msg = text.trim();
     setText("");
 
     // Lokális azonnali megjelenítés (offline fallback)
-    const tempId = crypto.randomUUID();
+    const tempId = crypto.randomUUID(); // EZ az ideiglenes ID
     setMessages((prev) => [
       ...prev,
       {
@@ -310,13 +326,15 @@ function GlobalChat({ user, messages, setMessages }: {
       },
     ]);
 
+    // 💡 ÚJ: Elküldjük a tempId-t a szervernek is!
     ws.send(
       JSON.stringify({
         type: "global_message",
         text: msg,
+        tempId: tempId, // <-- Ezt küldjük el
       })
     );
-  }
+}
 
   return (
     <div className="flex flex-col h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
@@ -660,6 +678,9 @@ export default function ForumUI() {
   };
 
   const loadChatMessages = async () => {
+    if (chatMessages.length > 0) {
+        return; 
+    }
     setChatLoading(true);
     try {
       const res = await fetch("/api/chat/message");
@@ -787,8 +808,6 @@ export default function ForumUI() {
       loadDMUsers();
     } else if (activePage === "chat") {
       loadChatMessages();
-      const interval = setInterval(loadChatMessages, 5000);
-      return () => clearInterval(interval);
     } else if (activePage === "notifications") {
       loadNotifications();
     }
@@ -1033,105 +1052,89 @@ export default function ForumUI() {
                             <p className="text-white/80 text-sm md:text-base mb-2">
                               {thread.excerpt}
                             </p>
-                            <div className="flex flex-wrap gap-3 text-[11px] md:text-xs text-white/70">
-                              <span>Szerző: {thread.author.username}</span>
-                              {thread.isPinned && (
-                                <span className="text-lime-300 flex items-center gap-1">
-                                  <Pin className="w-3 h-3" /> Kiemelt
-                                </span>
-                              )}
                             </div>
-                          </div>
+                            <div className="text-sm md:text-base text-right flex-shrink-0">
+                                <p className="text-white/70">Hozzászólások: {thread.posts?.length ?? 0}</p>
+                                <p className="text-lime-300">{thread.category?.name ?? 'Kategória nélkül'}</p>
+                            </div>
                         </div>
                       </div>
                     ))}
-                    {threads.length === 0 && (
-                      <p className="text-sm text-white/70">Nincs még téma ebben a kategóriában.</p>
-                    )}
                   </div>
                 </>
               )}
 
               {activeThread && (
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-6">
                   <button
-                    className="text-xs md:text-sm text-white/70 hover:text-white mb-2 self-start"
                     onClick={() => setActiveThread(null)}
+                    className="self-start text-sm text-lime-400 hover:text-lime-300 flex items-center gap-1"
                   >
-                    ← Vissza a listához
+                    ← Vissza a témákhoz
                   </button>
 
-                  <div className="bg-white/10 border border-white/20 rounded-2xl p-4">
-                    <h2 className="text-xl md:text-2xl font-bold mb-1">{activeThread.title}</h2>
-                    <p className="text-white/80 text-sm md:text-base mb-2">
-                      {activeThread.excerpt}
-                    </p>
-                    <div className="flex flex-wrap gap-3 text-[11px] md:text-xs text-white/70">
-                      <span>Szerző: {activeThread.author.username}</span>
-                      {activeThread.isPinned && (
-                        <span className="text-lime-300 flex items-center gap-1">
-                          <Pin className="w-3 h-3" /> Kiemelt
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  <h1 className="text-2xl md:text-3xl font-bold">{activeThread.title}</h1>
+                  <p className="text-white/80 text-sm md:text-base">
+                    Kategória: <span className="text-lime-300">{activeThread.category?.name ?? '?'}</span>
+                  </p>
 
-                  <div className="flex flex-col gap-3 max-h-[50vh] overflow-y-auto pr-1 md:pr-2">
-                    {posts.map((p) => (
-                      <div key={p.id} className="border-b border-white/20 pb-3 md:pb-4 text-sm md:text-base">
-                        <div className="flex items-center justify-between mb-1">
-                          <div className="flex items-center gap-2">
-                            <div className="w-6 h-6 rounded-full overflow-hidden bg-white/20 flex items-center justify-center">
-                              {p.author.avatarUrl ? (
-                                <img src={p.author.avatarUrl} className="w-full h-full object-cover" alt="" />
-                              ) : (
-                                <span className="text-[10px]">
-                                  {p.author.username.charAt(0).toUpperCase()}
-                                </span>
-                              )}
+                  <div className="flex flex-col gap-6 border-t border-white/20 pt-6">
+                    {posts.map((post) => (
+                      <div key={post.id} className="bg-black/20 p-4 rounded-xl shadow-lg">
+                        <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-3">
+                                <div className="bg-white/20 w-8 h-8 rounded-full overflow-hidden flex items-center justify-center">
+                                    {post.author.avatarUrl ? (
+                                        <img src={post.author.avatarUrl} className="w-full h-full object-cover" alt="Avatar" />
+                                    ) : (
+                                        <span className="text-xs font-semibold">{post.author.username.charAt(0).toUpperCase()}</span>
+                                    )}
+                                </div>
+                                <span className="font-semibold text-lime-300">{post.author.username}</span>
+                                <small className="text-white/50">
+                                    {new Date(post.createdAt).toLocaleDateString("hu-HU")}
+                                </small>
                             </div>
-                            <span className="font-semibold text-xs md:text-sm">
-                              {p.author.username}
-                            </span>
-                            {p.author.role === "MODERATOR" && (
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-lime-500/80 text-black">
-                                MOD
-                              </span>
-                            )}
-                          </div>
+                            
+                            <div className="flex items-center gap-2">
+                                {/* Like Count */}
+                                <div className="text-xs text-white/70 flex items-center gap-1">
+                                    <ThumbsUp className="w-3 h-3 text-red-400" />
+                                    {post.likes?.length ?? 0}
+                                </div>
+
+                                {/* Like Button */}
+                                <button
+                                    onClick={() => toggleLike(post.id)}
+                                    className={`p-1 rounded-full ${post.userLiked ? 'bg-red-500/80 hover:bg-red-600' : 'bg-white/10 hover:bg-white/20'}`}
+                                    title="Tetszik"
+                                >
+                                    <ThumbsUp className="w-4 h-4" />
+                                </button>
+                            </div>
                         </div>
-                        <p className="mb-2 whitespace-pre-wrap">{p.text}</p>
-                        <button
-                          className={`inline-flex items-center gap-1 text-[11px] md:text-xs px-2 py-1 rounded-full border transition ${
-                            p.likes.some((l: any) => l.userId === user.id)
-                              ? "border-lime-400 bg-lime-500/20 text-lime-300"
-                              : "border-white/30 text-white/80 hover:bg-white/10"
-                          }`}
-                          onClick={() => toggleLike(p.id)}
-                        >
-                          <ThumbsUp className="w-3 h-3" />
-                          <span>{p.likes.length}</span>
-                        </button>
+
+                        <p className="whitespace-pre-wrap text-white/90">{post.text}</p>
                       </div>
                     ))}
                   </div>
 
-                  {/* Reply Editor */}
-                  <div className="mt-2 flex flex-col gap-2">
+                  {/* Add Reply */}
+                  <div className="border-t border-white/20 pt-6 mt-6">
+                    <h3 className="text-xl font-bold mb-3">Válasz írása</h3>
                     <textarea
                       value={newReply}
                       onChange={(e) => setNewReply(e.target.value)}
-                      placeholder="Válasz írása..."
-                      className="bg-white/20 text-white placeholder:text-white/60 rounded-xl p-3 text-sm md:text-base min-h-[80px] border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+                      placeholder="Írja ide a válaszát..."
+                      className="w-full h-32 bg-white/10 p-3 rounded-lg text-white placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-lime-400 mb-3"
                     />
-                    <div className="flex justify-end">
-                      <button
-                        onClick={handleAddReply}
-                        className="bg-lime-500 hover:bg-lime-600 text-black px-4 py-2 rounded-lg font-semibold transition"
-                      >
-                        Küldés
-                      </button>
-                    </div>
+                    <button
+                      onClick={handleAddReply}
+                      disabled={!newReply.trim()}
+                      className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-6 py-2 rounded-lg font-semibold transition"
+                    >
+                      Elküldés
+                    </button>
                   </div>
                 </div>
               )}
@@ -1146,386 +1149,317 @@ export default function ForumUI() {
 
         {/* ------- DM Page ------- */}
         {activePage === "dm" && (
-          <div className="flex w-full h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
-            {/* DM Sidebar */}
-            <div className="w-1/3 border-r border-white/20 p-4 flex flex-col gap-3 overflow-y-auto">
-              <input
-                value={searchDMText}
-                onChange={(e) => handleUserSearch(e.target.value)}
-                placeholder="Felhasználó keresése..."
-                className="bg-white/20 text-white placeholder:text-white/60 rounded-lg px-3 py-2 text-sm border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-              />
-
-              {searchUsers.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  {searchUsers.map((u: any) => (
-                    <button
-                      key={u.id}
-                      onClick={() => loadConversation(u.id)}
-                      className="p-2 rounded-lg bg-white/10 hover:bg-white/20 flex items-center gap-3 transition text-sm"
-                    >
-                      <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
-                        {u.avatarUrl ? (
-                          <img src={u.avatarUrl} className="w-full h-full object-cover" alt="" />
-                        ) : (
-                          u.username.charAt(0).toUpperCase()
-                        )}
-                      </div>
-                      <span>{u.username}</span>
-
-                      {onlineUsers.includes(u.id) && (
-                        <span className="ml-auto w-2 h-2 rounded-full bg-lime-400" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              <div className="flex flex-col gap-2">
-                {dmLoading ? (
-                  <p className="text-sm text-white/60">Betöltés...</p>
-                ) : dmUsers.length === 0 ? (
-                  <p className="text-sm text-white/60">Nincsenek beszélgetések.</p>
-                ) : (
-                  dmUsers.map((u: any) => (
-                    <button
-                      key={u.id}
-                      onClick={() => loadConversation(u.id)}
-                      className={`p-2 rounded-lg flex items-center gap-3 transition text-sm ${
-                        activeDM === u.id
-                          ? "bg-lime-500/50 text-black"
-                          : "bg-white/10 hover:bg-white/20"
-                      }`}
-                    >
-                      <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
-                        {u.avatarUrl ? (
-                          <img src={u.avatarUrl} className="w-full h-full object-cover" alt="" />
-                        ) : (
-                          u.username.charAt(0).toUpperCase()
-                        )}
-                      </div>
-                      <span>{u.username}</span>
-
-                      {onlineUsers.includes(u.id) && (
-                        <span className="ml-auto w-2 h-2 rounded-full bg-lime-400" />
-                      )}
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-
-            {/* DM Conversation */}
-            <div className="flex-1 flex flex-col">
-              {!activeDM && (
-                <div className="flex flex-1 items-center justify-center text-white/70 text-sm">
-                  📬 Válassz egy beszélgetést!
-                </div>
-              )}
-
-              {activeDM && (
-                <>
-                  <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
-                    {dmMessages.map((m) => (
-                      <div
-                        key={m.id}
-                        className={`max-w-[70%] p-3 rounded-xl text-sm whitespace-pre-wrap ${
-                          m.fromId === user.id
-                            ? "self-end bg-lime-500 text-black"
-                            : "self-start bg-white/20"
-                        }`}
-                      >
-                        {m.text}
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="border-t border-white/20 p-4 flex gap-2">
+            <div className="flex flex-col md:flex-row gap-4 md:gap-6 h-full">
+                {/* Conversations List */}
+                <div className="md:w-64 w-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 flex flex-col gap-4 md:h-full max-h-64 md:max-h-none overflow-y-auto">
+                    <h2 className="text-lg md:text-xl font-semibold mb-2">Beszélgetések</h2>
                     <input
-                      value={dmText}
-                      onChange={(e) => setDMText(e.target.value)}
-                      onKeyDown={(e) =>
-                        e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())
-                      }
-                      placeholder="Írj üzenetet..."
-                      className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+                        type="text"
+                        value={searchDMText}
+                        onChange={(e) => handleUserSearch(e.target.value)}
+                        placeholder="Keresés..."
+                        className="w-full pl-3 pr-4 py-2 bg-white/20 border border-white/30 rounded-lg text-white placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-lime-400 mb-2"
                     />
 
-                    <button
-                      onClick={sendMessage}
-                      disabled={!dmText.trim()}
-                      className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition"
-                    >
-                      <Send className="w-4 h-4" /> Küldés
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )}
+                    {searchUsers.length > 0 && (
+                        <div className="border-b border-white/20 pb-2 mb-2">
+                            <p className="text-xs text-lime-300 mb-1">Keresési találatok:</p>
+                            {searchUsers.map((u: any) => (
+                                <button
+                                    key={u.id}
+                                    onClick={() => {
+                                        loadConversation(u.id);
+                                        setSearchDMText("");
+                                        setSearchUsers([]);
+                                    }}
+                                    className="w-full text-left justify-start text-white hover:bg-white/20 px-3 py-2 rounded-lg transition flex items-center gap-2"
+                                >
+                                    <User className="w-4 h-4" /> {u.username}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                    
+                    {dmLoading ? (
+                        <p className="text-white/50 italic">Betöltés...</p>
+                    ) : dmUsers.length === 0 ? (
+                        <p className="text-white/50 italic">Nincs aktív beszélgetés.</p>
+                    ) : (
+                        dmUsers.map((conv: any) => {
+                            const partner = conv.user1Id === user.id ? conv.user2 : conv.user1;
+                            const active = activeDM === partner.id;
+                            const unread = conv.unreadCount > 0;
+                            return (
+                                <button
+                                    key={partner.id}
+                                    onClick={() => loadConversation(partner.id)}
+                                    className={`w-full text-left justify-start text-white hover:bg-white/20 px-3 py-2 rounded-lg transition flex items-center gap-2 ${active ? "bg-white/20" : ""}`}
+                                >
+                                    <div className={`w-3 h-3 rounded-full flex-shrink-0 ${onlineUsers.includes(partner.id) ? 'bg-lime-400' : 'bg-white/40'}`}></div>
+                                    <span className="truncate flex-1">{partner.username}</span>
+                                    {unread && <span className="w-4 h-4 rounded-full bg-red-500 text-[10px] flex items-center justify-center font-bold">{conv.unreadCount}</span>}
+                                </button>
+                            );
+                        })
+                    )}
+                </div>
 
+                {/* Message View */}
+                <div className="flex-1 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 overflow-hidden flex flex-col">
+                    {!activeDM ? (
+                        <div className="flex-1 flex items-center justify-center text-white/50">
+                            Válasszon egy felhasználót a beszélgetéshez.
+                        </div>
+                    ) : (
+                        <>
+                            <div className="border-b border-white/20 pb-3 mb-4">
+                                <h3 className="text-xl font-bold">Beszélgetés: {dmUsers.find((c: any) => c.user1Id === activeDM || c.user2Id === activeDM)?.user1?.username || dmUsers.find((c: any) => c.user1Id === activeDM || c.user2Id === activeDM)?.user2?.username || '...'}</h3>
+                            </div>
+                            
+                            <div className="flex-1 overflow-y-auto flex flex-col gap-3 mb-4">
+                                {dmMessages.map((msg: any) => {
+                                    const isMe = msg.fromId === user.id;
+                                    return (
+                                        <div
+                                            key={msg.id}
+                                            className={`p-2 rounded-lg max-w-[80%] ${isMe ? 'self-end bg-lime-700/50' : 'self-start bg-white/10'}`}
+                                        >
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <b className={isMe ? 'text-lime-300' : ''}>{isMe ? 'Én' : msg.fromUser.username}</b>
+                                                <small className="text-white/50">
+                                                    {new Date(msg.createdAt).toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit" })}
+                                                </small>
+                                            </div>
+                                            <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            <div className="flex gap-2">
+                                <input
+                                    value={dmText}
+                                    onChange={(e) => setDMText(e.target.value)}
+                                    onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), sendMessage())}
+                                    placeholder="Írj privát üzenetet..."
+                                    className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+                                />
+                                <button
+                                    onClick={sendMessage}
+                                    disabled={!dmText.trim()}
+                                    className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition flex items-center gap-2"
+                                >
+                                    <Send className="w-4 h-4" /> Küldés
+                                </button>
+                            </div>
+                        </>
+                    )}
+                </div>
+            </div>
+        )}
+        
         {/* ------- Notifications Page ------- */}
         {activePage === "notifications" && (
-          <div className="flex flex-col h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
-            <div className="border-b border-white/20 p-4 flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold">Értesítések</h2>
-                <p className="text-sm text-white/70">
-                  {notifications.filter((n) => !n.isRead).length} olvasatlan értesítés
-                </p>
-              </div>
-              {notifications.length > 0 && (
-                <button
-                  onClick={clearAllNotifications}
-                  className="text-sm text-white/70 hover:text-white transition"
-                >
-                  Összes törlése
-                </button>
-              )}
-            </div>
+            <div className="flex flex-col h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 overflow-y-auto">
+                <div className="flex items-center justify-between border-b border-white/20 pb-3 mb-4">
+                    <h2 className="text-xl md:text-2xl font-bold">Értesítések</h2>
+                    <button
+                        onClick={clearAllNotifications}
+                        className="text-sm text-red-400 hover:text-red-300 flex items-center gap-1"
+                        title="Összes törlése"
+                    >
+                        <Trash2 className="w-4 h-4" /> Összes törlése
+                    </button>
+                </div>
 
-            {notifLoading ? (
-              <div className="flex-1 flex items-center justify-center">
-                <p className="text-white/70">Betöltés...</p>
-              </div>
-            ) : (
-              <div className="flex-1 overflow-y-auto p-4">
-                {notifications.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-white/70">
-                    <Bell className="w-16 h-16 mb-4 opacity-50" />
-                    <p>Nincsenek értesítéseid</p>
-                  </div>
+                {notifLoading ? (
+                    <p className="text-white/50 italic">Betöltés...</p>
+                ) : notifications.length === 0 ? (
+                    <p className="text-white/50 italic">Nincsenek új értesítések.</p>
                 ) : (
-                  <div className="flex flex-col gap-2">
-                    {notifications.map((notif) => (
-                      <div
-                        key={notif.id}
-                        className={`p-4 rounded-xl border transition cursor-pointer ${
-                          notif.isRead
-                            ? "bg-white/5 border-white/10"
-                            : "bg-white/10 border-lime-400/50"
-                        }`}
-                        onClick={() => !notif.isRead && markNotificationRead(notif.id)}
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center flex-shrink-0">
-                            <Bell className="w-5 h-5" />
-                          </div>
-                          <div className="flex-1">
-                            <p className="text-sm font-semibold mb-1">{notif.title}</p>
-                            <p className="text-sm text-white/80 mb-2">{notif.message}</p>
-                            <span className="text-[11px] text-white/50">
-                              {new Date(notif.createdAt).toLocaleString("hu-HU")}
-                            </span>
-                          </div>
-                          {!notif.isRead && <div className="w-2 h-2 rounded-full bg-lime-400"></div>}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                    <div className="flex flex-col gap-3">
+                        {notifications.map((n: any) => (
+                            <div 
+                                key={n.id} 
+                                className={`p-3 rounded-lg border ${n.read ? 'bg-white/5 border-white/10' : 'bg-lime-700/20 border-lime-500/50'}`}
+                            >
+                                <div className="flex items-start justify-between">
+                                    <p className="flex-1 text-sm md:text-base">
+                                        {n.text}
+                                    </p>
+                                    <button 
+                                        onClick={() => markNotificationRead(n.id)}
+                                        className="text-xs text-lime-400 hover:text-lime-300 ml-4 flex-shrink-0"
+                                    >
+                                        {n.read ? 'Olvasott' : 'Megjelölés olvasottként'}
+                                    </button>
+                                </div>
+                                <small className="text-white/50 block mt-1">
+                                    {new Date(n.createdAt).toLocaleDateString("hu-HU")} {new Date(n.createdAt).toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit" })}
+                                </small>
+                            </div>
+                        ))}
+                    </div>
                 )}
-              </div>
-            )}
-          </div>
+            </div>
         )}
 
         {/* ------- Profile Page ------- */}
         {activePage === "profile" && user && (
-          <div className="flex flex-col md:flex-row gap-6 h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-6">
-            {/* LEFT: Avatar */}
-            <div className="w-full md:w-1/3 flex flex-col items-center text-center gap-4">
-              <div
-                className="relative w-24 h-24 md:w-32 md:h-32 rounded-full bg-white/20 overflow-hidden flex items-center justify-center text-3xl md:text-4xl cursor-pointer group"
-                onClick={() => document.getElementById("avatarInput")?.click()}
-              >
-                {user.avatarUrl ? (
-                  <img src={user.avatarUrl} className="w-full h-full object-cover" alt="Avatar" />
-                ) : (
-                  (user?.username?.charAt(0)?.toUpperCase() ?? "?")
-                )}
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-xs md:text-sm">
-                  Avatar módosítása
+            <div className="flex flex-col h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 overflow-y-auto">
+                <h2 className="text-xl md:text-2xl font-bold border-b border-white/20 pb-3 mb-4">Profil beállítások</h2>
+
+                {/* Status messages */}
+                {profileError && <div className="p-3 bg-red-600/50 rounded-lg text-red-200 mb-4">{profileError}</div>}
+                {profileSuccess && <div className="p-3 bg-lime-600/50 rounded-lg text-lime-200 mb-4">{profileSuccess}</div>}
+
+                <div className="flex items-center gap-6 mb-8">
+                    {/* Avatar Display */}
+                    <div className="relative w-24 h-24 rounded-full bg-black/50 overflow-hidden flex items-center justify-center border-4 border-lime-400/50">
+                        {user.avatarUrl ? (
+                            <img src={user.avatarUrl} className="w-full h-full object-cover" alt="Avatar" />
+                        ) : (
+                            <span className="text-4xl font-semibold">{user.username.charAt(0).toUpperCase()}</span>
+                        )}
+
+                        {/* Avatar Upload Button */}
+                        <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleAvatarChange}
+                            className="absolute inset-0 opacity-0 cursor-pointer"
+                        />
+                    </div>
+
+                    <div className="text-lg">
+                        <p className="font-bold">{user.username}</p>
+                        <p className="text-sm text-lime-300">
+                            Szerepkör: {user.role === "MODERATOR" ? "Moderátor" : user.role === "ADMIN" ? "Admin" : "Felhasználó"}
+                        </p>
+                        <p className="text-sm text-white/70">Csatlakozott: {new Date(user.createdAt).toLocaleDateString("hu-HU")}</p>
+                    </div>
                 </div>
-              </div>
 
-              <div>
-                <p className="text-xl md:text-2xl font-bold">{user.username}</p>
-                <p className="text-lime-300 text-sm md:text-base">
-                  {user.role === "MODERATOR"
-                    ? "Moderátor"
-                    : user.role === "ADMIN"
-                    ? "Admin"
-                    : "Felhasználó"}
-                </p>
-                <p className="text-xs md:text-sm text-white/70 mt-1">
-                  {onlineUsers.includes(user.id) ? "🟢 Online" : "⚫ Offline"}
-                </p>
-              </div>
+                <div className="flex flex-col gap-4 max-w-lg">
+                    {/* Username */}
+                    <label className="block">
+                        <span className="text-white/70">Felhasználónév</span>
+                        <input
+                            type="text"
+                            value={profileUsername}
+                            onChange={(e) => setProfileUsername(e.target.value)}
+                            className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
+                        />
+                    </label>
 
-              {/* Rejtett / kicsi input + gomb */}
-              <div className="flex flex-col items-center gap-2 text-sm">
-                <input
-                  id="avatarInput"
-                  type="file"
-                  accept="image/*"
-                  onChange={handleAvatarChange}
-                  className="hidden"
-                />
+                    {/* Email */}
+                    <label className="block">
+                        <span className="text-white/70">Email cím</span>
+                        <input
+                            type="email"
+                            value={profileEmail}
+                            onChange={(e) => setProfileEmail(e.target.value)}
+                            className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
+                        />
+                    </label>
+
+                    {/* Password */}
+                    <label className="block">
+                        <span className="text-white/70">Új jelszó (Hagyja üresen, ha nem akarja megváltoztatni)</span>
+                        <input
+                            type="password"
+                            value={profilePassword}
+                            onChange={(e) => setProfilePassword(e.target.value)}
+                            className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
+                        />
+                    </label>
+                </div>
+
                 <button
-                  onClick={() => document.getElementById("avatarInput")?.click()}
-                  className="px-4 py-2 rounded-lg bg-white/20 hover:bg-white/30 border border-white/30"
+                    onClick={handleSaveProfile}
+                    disabled={savingProfile}
+                    className="mt-6 bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-6 py-2 rounded-lg font-semibold transition max-w-max"
                 >
-                  Új avatar feltöltése
+                    {savingProfile ? "Mentés..." : "Profil mentése"}
                 </button>
-                <p className="text-[11px] text-white/60">Max 2MB · katt a képre is működik</p>
-              </div>
             </div>
-
-            {/* RIGHT: Settings */}
-            <div className="flex-1 flex flex-col gap-4 text-sm md:text-base">
-              <div className="bg-white/10 border-white/20 border p-4 rounded-2xl">
-                <h3 className="font-semibold mb-3">Profil adatok szerkesztése</h3>
-
-                {profileError && (
-                  <p className="text-sm text-red-300 mb-2">{profileError}</p>
-                )}
-                {profileSuccess && (
-                  <p className="text-sm text-lime-300 mb-2">{profileSuccess}</p>
-                )}
-
-                <div className="flex flex-col gap-3">
-                  <div>
-                    <label className="text-white/80 text-sm">Felhasználónév</label>
-                    <input
-                      value={profileUsername}
-                      onChange={(e) => setProfileUsername(e.target.value)}
-                      className="w-full bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-white/80 text-sm">E-mail cím</label>
-                    <input
-                      type="email"
-                      value={profileEmail}
-                      onChange={(e) => setProfileEmail(e.target.value)}
-                      className="w-full bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-white/80 text-sm">Új jelszó</label>
-                    <input
-                      type="password"
-                      value={profilePassword}
-                      onChange={(e) => setProfilePassword(e.target.value)}
-                      placeholder="Ha üres, nem változik"
-                      className="w-full bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-                    />
-                  </div>
-
-                  <div className="flex justify-end">
-                    <button
-                      onClick={handleSaveProfile}
-                      disabled={savingProfile}
-                      className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-6 py-2 rounded-lg font-semibold transition"
-                    >
-                      {savingProfile ? "Mentés..." : "Mentés"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white/10 border-white/20 border p-4 rounded-2xl">
-                <h3 className="font-semibold mb-2">Moderátori eszközök</h3>
-                {user.role === "MODERATOR" || user.role === "ADMIN" ? (
-                  <ul className="text-sm opacity-80 space-y-1">
-                    <li>• Chat üzenetek törlése</li>
-                    <li>• Témák zárolása / kiemelése</li>
-                    <li>• Felhasználók figyelmeztetése</li>
-                  </ul>
-                ) : (
-                  <p className="text-sm text-white/70">Nincs moderátori jogosultságod.</p>
-                )}
-              </div>
-            </div>
-          </div>
         )}
-
-        {/* ------- New Topic Modal ------- */}
+        
+        {/* NEW TOPIC POPUP */}
         {showNewTopicPopup && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
-            <div className="bg-white/10 border border-white/20 backdrop-blur-xl p-6 rounded-2xl w-full max-w-md shadow-xl">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-semibold text-white">Új téma hozzáadása</h3>
-                <button
-                  onClick={() => setShowNewTopicPopup(false)}
-                  className="text-white/70 hover:text-white"
-                >
-                  <X className="w-5 h-5" />
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+            <div className="bg-white/10 border border-white/20 backdrop-blur-xl p-6 rounded-2xl w-full max-w-lg">
+              <div className="flex justify-between items-center border-b border-white/20 pb-3 mb-4">
+                <h3 className="text-xl font-bold">Új téma indítása</h3>
+                <button onClick={() => setShowNewTopicPopup(false)}>
+                  <X className="w-6 h-6 text-white/70 hover:text-white" />
                 </button>
               </div>
 
-              <input
-                value={newTopicTitle}
-                onChange={(e) => setNewTopicTitle(e.target.value)}
-                placeholder="Téma címe..."
-                className="w-full mb-3 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-              />
+              <div className="flex flex-col gap-4">
+                <label className="block">
+                  <span className="text-white/70">Kategória</span>
+                  <select
+                    value={selectedCategory}
+                    onChange={(e) => setSelectedCategory(e.target.value)}
+                    className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
+                  >
+                    {categories.map((cat: any) => (
+                      <option key={cat.id} value={cat.id}>
+                        {cat.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-              <textarea
-                value={newTopicBody}
-                onChange={(e) => setNewTopicBody(e.target.value)}
-                placeholder="Leírás..."
-                className="w-full mb-4 bg-white/20 text-white placeholder:text-white/60 px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400 min-h-[100px]"
-              />
+                <label className="block">
+                  <span className="text-white/70">Cím</span>
+                  <input
+                    type="text"
+                    value={newTopicTitle}
+                    onChange={(e) => setNewTopicTitle(e.target.value)}
+                    placeholder="A téma címe"
+                    className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-lime-400"
+                  />
+                </label>
 
-              <select
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                className="w-full mb-4 bg-white/20 text-white px-4 py-2 rounded-lg border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-              >
-                <option value="all" disabled>
-                  Válassz kategóriát...
-                </option>
-                {categories.map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    {cat.name}
-                  </option>
-                ))}
-              </select>
+                <label className="block">
+                  <span className="text-white/70">Leírás/Bevezető</span>
+                  <textarea
+                    value={newTopicBody}
+                    onChange={(e) => setNewTopicBody(e.target.value)}
+                    placeholder="A téma rövid leírása (markdown támogatott)"
+                    className="w-full h-32 bg-white/10 p-3 rounded-lg mt-1 text-white placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-lime-400"
+                  />
+                </label>
+              </div>
 
-              <div className="flex justify-end gap-2">
+              <div className="flex justify-end gap-2 mt-6">
                 <button
-                  className="text-white hover:bg-white/10 px-4 py-2 rounded-lg transition"
                   onClick={() => setShowNewTopicPopup(false)}
+                  className="px-4 py-2 text-sm rounded-lg border border-white/30 hover:bg-white/10"
                 >
                   Mégse
                 </button>
                 <button
-                  className="bg-lime-500 hover:bg-lime-600 text-black px-4 py-2 rounded-lg font-semibold transition"
                   onClick={handleAddTopic}
+                  disabled={!newTopicTitle.trim() || !newTopicBody.trim()}
+                  className="px-4 py-2 text-sm rounded-lg bg-lime-500 hover:bg-lime-600 text-black font-semibold disabled:bg-white/20 disabled:text-white/40"
                 >
-                  Hozzáadás
+                  Téma indítása
                 </button>
               </div>
             </div>
           </div>
         )}
-
-        {/* ------- Avatar Cropper Modal ------- */}
+        
+        {/* AVATAR CROPPER POPUP */}
         {showCropper && cropSrc && (
-          <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center z-50 p-4">
-            <div className="bg-neutral-900 border border-white/20 rounded-2xl p-4 w-full max-w-lg">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-lg font-semibold">Avatar kivágása</h3>
-                <button onClick={handleCropCancel} className="text-white/70 hover:text-white">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="relative w-full h-64 bg-black rounded-xl overflow-hidden">
+          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100]">
+            <div className="bg-white/10 border border-white/20 backdrop-blur-xl p-6 rounded-2xl w-full max-w-md">
+              <h3 className="text-xl font-bold mb-4 border-b border-white/20 pb-3">Avatar Vágása</h3>
+              
+              <div className="relative w-full h-80 bg-black/30 rounded-lg overflow-hidden">
                 <Cropper
                   image={cropSrc}
                   crop={crop}
