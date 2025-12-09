@@ -206,33 +206,77 @@ function GlobalChat({ user, messages, setMessages }: {
     ws.send(JSON.stringify({ type: "typing", chat: "global" }));
   }
 
-  // ---- Reaction Toggle ----
-  function toggleReaction(messageId: string, emoji: string) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: "chat_reaction", messageId, emoji }));
-  }
+  // ---- Reaction Toggle (JAVÍTVA: REST API-t használ) ----
+function toggleReaction(messageId, emoji) {
+  fetch("/api/chat/reaction", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messageId, emoji }),
+  }).catch(() => {
+    alert("Hiba történt a reakció elküldésekor.");
+  });
+}
 
-  // ---- Start Edit ----
   function startEdit(msg: any) {
-    setEditMessage(msg);
-    setEditText(msg.text);
-  }
+  setEditMessage(msg);
+  setEditText(msg.text);
+}
 
-  // ---- Save Edit ----
   function saveEdit() {
-    if (!editMessage || !editText.trim() || !ws) return;
+  if (!editMessage || !editText.trim()) return;
 
-    ws.send(
-      JSON.stringify({
-        type: "chat_edit",
-        id: editMessage.id,
-        text: editText.trim(),
-      })
-    );
+  const messageId = editMessage.id;
+  const newText = editText.trim();
 
-    setEditMessage(null);
-    setEditText("");
-  }
+  // 1. Local echo (maradhat)
+  setMessages((prev) =>
+    prev.map((m) =>
+      m.id === messageId ? { ...m, text: newText, edited: true } : m
+    )
+  );
+
+  // 2. REST PUT – EBBEN VAN A .then / .catch
+  fetch(`/api/chat/message/${messageId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: newText }),
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error(
+          "Edit save SERVER error (Status:",
+          res.status,
+          "):",
+          errorText
+        );
+        alert("Hiba történt a szerkesztés mentésekor: " + errorText);
+        // ide akár betolhatsz egy rollback-et is, ha akarod
+        return;
+      }
+
+      // 3. Sikeres mentés után opcionális WS broadcast
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: "chat_edit",
+            id: messageId,
+            text: newText,
+          })
+        );
+      }
+    })
+    .catch((e) => {
+      console.error("Edit save NETWORK/FETCH error:", e);
+      alert(
+        "Hiba történt a szerkesztés mentésekor. Kérem, ellenőrizze a szerver logokat!"
+      );
+    });
+
+  // 4. Modal bezárása
+  setEditMessage(null);
+  setEditText("");
+}
 
   // ---- WebSocket Listener ----
   useEffect(() => {
@@ -283,12 +327,13 @@ function GlobalChat({ user, messages, setMessages }: {
         }
 
         // ✏️ Szerkesztett üzenet
-        if (data.type === "chat_edit") {
-          setMessages((prev) =>
-            prev.map((m) => (m.id === data.message.id ? data.message : m))
-          );
-          return;
-        }
+        // ✏️ BEJÖVŐ SZERKESZTÉS
+if (data.type === "chat_edit") {
+  setMessages((prev) =>
+    prev.map((m) => (m.id === data.message.id ? data.message : m))
+  );
+  return;
+}
       } catch (e) {
         console.error("WS parse error:", e);
       }
@@ -305,14 +350,13 @@ function GlobalChat({ user, messages, setMessages }: {
   }, [messages]);
 
   // ---- SEND MESSAGE ----
-// GlobalChat - handleSend
 function handleSend() {
-    if (!text.trim() || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!text.trim()) return; 
     const msg = text.trim();
     setText("");
 
-    // Lokális azonnali megjelenítés (offline fallback)
-    const tempId = crypto.randomUUID(); // EZ az ideiglenes ID
+    // 1. Lokális azonnali megjelenítés (Local Echo)
+    const tempId = crypto.randomUUID(); 
     setMessages((prev) => [
       ...prev,
       {
@@ -326,14 +370,21 @@ function handleSend() {
       },
     ]);
 
-    // 💡 ÚJ: Elküldjük a tempId-t a szervernek is!
-    ws.send(
-      JSON.stringify({
-        type: "global_message",
-        text: msg,
-        tempId: tempId, // <-- Ezt küldjük el
-      })
-    );
+    // 2. REST API HÍVÁS A PERZISZTENCIÁHOZ (adatbázisba mentés)
+    // EZ A HÍVÁS INDÍTJA EL A SZERVEROLDALI MENTÉST ÉS BROADCASTOT!
+    fetch("/api/chat/message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Elküldjük a tempId-t a szervernek
+        body: JSON.stringify({ text: msg, tempId: tempId }), 
+    })
+    // NINCS TOVÁBBI WS.SEND() ITT! Csak a REST API hívás!
+    .catch(e => {
+        console.error("Chat message send error:", e);
+        // Hiba esetén eltávolítjuk a local echo üzenetet
+        setMessages((prev) => prev.filter(m => m.id !== tempId));
+        alert("Hiba történt az üzenet elküldésekor. Kérem, próbálja újra.");
+    });
 }
 
   return (
@@ -377,32 +428,55 @@ function handleSend() {
 
               {/* Edited Label */}
               {msg.edited && (
-                <small className="text-white/40 text-[10px]">szerkesztve</small>
-              )}
+  <small
+    className="text-white/40 text-[10px] cursor-help"
+    title={`Szerkesztve: ${new Date(msg.updatedAt).toLocaleString("hu-HU")}`}
+  >
+    (szerkesztve)
+  </small>
+)}
 
               {/* REACTIONS */}
               <div className="flex gap-1 mt-2">
                 {REACTIONS.map((emoji) => (
                   <button
-                    key={emoji}
-                    onClick={() => toggleReaction(msg.id, emoji)}
-                    className="text-sm px-2 py-[1px] rounded-md hover:bg-white/20 transition"
-                  >
-                    {emoji}
-                  </button>
+  key={emoji}
+  onClick={() => toggleReaction(msg.id, emoji)}
+  className={
+    "text-sm px-2 py-[1px] rounded-md transition " +
+    (msg.reactions?.some(r => r.emoji === emoji && r.mine)
+      ? "bg-lime-500/30 scale-110"
+      : "hover:bg-white/20")
+  }
+>
+  {emoji}
+</button>
                 ))}
               </div>
 
               {/* REACTION COUNT */}
-              {msg.reactions?.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-1 text-xs">
-                  {msg.reactions.map((r: any, i: number) => (
-                    <span key={i} className="px-2 py-[1px] rounded bg-white/20">
-                      {r.emoji} x{r.count}
-                    </span>
-                  ))}
-                </div>
-              )}
+{/* REACTION COUNT (Tooltip-pel) */}
+{msg.reactions?.length > 0 && (
+  <div className="flex flex-wrap gap-1 mt-1 text-xs">
+    {msg.reactions.map((r: any, i: number) => (
+      <div key={i} className="relative group">
+        <span
+          className={`px-2 py-[1px] rounded-full border border-white/20 bg-white/10 flex items-center gap-1 cursor-default ${
+            r.mine ? "bg-lime-500/30 border-lime-300/50" : ""
+          }`}
+        >
+          {r.emoji}
+          <b className="text-[10px] opacity-90">{r.count}</b>
+        </span>
+
+        {/* Tooltip */}
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:flex bg-black/90 text-white text-[11px] px-2 py-1 rounded shadow border border-white/20 whitespace-nowrap z-50">
+          {r.users?.join(", ")}
+        </div>
+      </div>
+    ))}
+  </div>
+)}
             </div>
           );
         })}
@@ -410,10 +484,10 @@ function handleSend() {
 
       {/* TYPING */}
       {typingUser && (
-        <div className="p-2 text-sm text-white/70 italic">
-          💬 {typingUser} éppen ír...
-        </div>
-      )}
+  <div className="p-2 text-sm text-white/70 italic animate-pulse">
+    💬 {typingUser} éppen ír...
+  </div>
+)}
 
       {/* INPUT BAR */}
       <div className="border-t border-white/20 p-4 flex gap-2">
@@ -535,6 +609,7 @@ export default function ForumUI() {
   const [dmLoading, setDMLoading] = useState(false);
   const [searchUsers, setSearchUsers] = useState<any[]>([]);
   const [searchDMText, setSearchDMText] = useState("");
+  const [allUsers, setAllUsers] = useState<any[]>([]);
 
   // Global Chat state
   const [chatMessages, setChatMessages] = useState<any[]>([]);
@@ -559,46 +634,65 @@ export default function ForumUI() {
   const [newTopicTitle, setNewTopicTitle] = useState("");
   const [newTopicBody, setNewTopicBody] = useState("");
 
-  // WS: presence + DM
   useEffect(() => {
-    if (!ws) return;
+  fetch("/api/users/online")
+    .then(res => res.json())
+    .then(data => setAllUsers(data.users))
+    .catch(() => setAllUsers([]));
+}, []);
 
-    function onMessage(ev: MessageEvent) {
-      try {
-        const data = JSON.parse(ev.data);
+  // WS: presence + DM
+useEffect(() => {
+  if (!ws) return;
 
-        if (data.type === "presence_snapshot") {
-          setOnlineUsers(Array.isArray(data.users) ? data.users : []);
-          return;
-        }
+  function onMessage(ev: MessageEvent) {
+    try {
+      const data = JSON.parse(ev.data);
 
-        if (data.type === "presence_update") {
-          setOnlineUsers((prev) => {
-            const set = new Set(prev);
-            if (data.status === "online") set.add(data.userId);
-            else if (data.status === "offline") set.delete(data.userId);
-            return Array.from(set);
-          });
-          return;
-        }
+      if (data.type === "presence_snapshot") {
+        setOnlineUsers(Array.isArray(data.users) ? data.users : []);
 
-        if (data.type === "dm_message") {
-          const m = data.message;
-          if (activeDM && (m.fromId === activeDM || m.toId === activeDM)) {
-            setDMMessages((prev: any[]) => [...prev, m]);
-          }
-          loadDMUsers();
-          loadUnreadCounts();
-          return;
-        }
-      } catch (e) {
-        console.error("WS parse error", e);
+        fetch("/api/users/online")
+          .then(res => res.json())
+          .then(data => setAllUsers(data.users))
+          .catch(() => setAllUsers([]));
+
+        return;
       }
-    }
 
-    ws.addEventListener("message", onMessage);
-    return () => ws.removeEventListener("message", onMessage);
-  }, [ws, activeDM]);
+      if (data.type === "presence_update") {
+        setOnlineUsers(prev => {
+          const set = new Set(prev);
+          if (data.status === "online") set.add(data.userId);
+          else if (data.status === "offline") set.delete(data.userId);
+          return Array.from(set);
+        });
+
+        fetch("/api/users/online")
+          .then(res => res.json())
+          .then(data => setAllUsers(data.users))
+          .catch(() => setAllUsers([]));
+
+        return;
+      }
+
+      if (data.type === "dm_message") {
+        const m = data.message;
+        if (activeDM && (m.fromId === activeDM || m.toId === activeDM)) {
+          setDMMessages((prev: any[]) => [...prev, m]);
+        }
+        loadDMUsers();
+        loadUnreadCounts();
+        return;
+      }
+    } catch (e) {
+      console.error("WS parse error", e);
+    }
+  }
+
+  ws.addEventListener("message", onMessage);
+  return () => ws.removeEventListener("message", onMessage);
+}, [ws, activeDM]);
 
   // ------------------------- Fetchers -------------------------
   const loadCategories = async () => {
@@ -647,18 +741,20 @@ export default function ForumUI() {
     setDMLoading(false);
   };
 
-  const loadConversation = async (userId: string) => {
-    setActiveDM(userId);
-    try {
-      const res = await fetch(`/api/dm/messages/${userId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setDMMessages(data.messages);
-      }
-    } catch (err) {
-      console.error("Failed to load conversation:", err);
+const loadConversation = async (userId: string) => {
+  setActiveDM(userId);
+  try {
+    const res = await fetch(`/api/dm/messages/${userId}`);
+    if (res.ok) {
+      const data = await res.json();
+      setDMMessages(data.messages || []);
+    } else {
+      setDMMessages([]);
     }
-  };
+  } catch (err) {
+    setDMMessages([]);
+  }
+};
 
   const sendMessage = () => {
     if (!dmText || !activeDM || !ws) return;
@@ -705,7 +801,6 @@ export default function ForumUI() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
-      loadChatMessages();
     } catch (err) {
       console.error("Failed to send chat message:", err);
       setChatText(text);
@@ -1179,6 +1274,27 @@ export default function ForumUI() {
                             ))}
                         </div>
                     )}
+
+                    {/* ONLINE USERS */}
+<div className="border-b border-white/20 pb-2 mb-2">
+  <p className="text-xs text-lime-300 mb-1">Online felhasználók:</p>
+
+  {onlineUsers
+    .filter(id => id !== user.id)
+    .map(id => {
+      const u = allUsers.find(us => us.id === id);
+      if (!u) return null;
+      return (
+        <button
+          key={u.id}
+          onClick={() => loadConversation(u.id)}
+          className="w-full text-left justify-start text-white hover:bg-lime-400/20 px-3 py-2 rounded-lg transition flex items-center gap-2"
+        >
+          <User className="w-4 h-4" /> {u.username}
+        </button>
+      );
+    })}
+</div>
                     
                     {dmLoading ? (
                         <p className="text-white/50 italic">Betöltés...</p>

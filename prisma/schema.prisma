@@ -7,30 +7,22 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum Role {
-  USER
-  MODERATOR
-  ADMIN
-}
-
 model User {
-  id        String   @id @default(cuid())
-  username  String   @unique
-  email     String   @unique
-  password  String
-  avatarUrl String?
-  role      Role     @default(USER)
-  joinedAt  DateTime @default(now())
-  
-  // Relations
-  threads       Thread[]
-  posts         Post[]
-  likes         Like[]
+  id            String         @id @default(cuid())
+  username      String         @unique
+  email         String         @unique
+  password      String
+  avatarUrl     String?
+  role          Role           @default(USER)
+  joinedAt      DateTime       @default(now())
   chatMessages  ChatMessage[]
-  notifications Notification[]
-  dmSent        DMMessage[]      @relation("DMFrom")
-  dmReceived    DMMessage[]      @relation("DMTo")
   ChatReactions ChatReaction[]
+  dmSent        DMMessage[]    @relation("DMFrom")
+  dmReceived    DMMessage[]    @relation("DMTo")
+  likes         Like[]
+  notifications Notification[]
+  posts         Post[]
+  threads       Thread[]
 
   @@index([email])
   @@index([username])
@@ -45,20 +37,18 @@ model Category {
 }
 
 model Thread {
-  id          String   @id @default(cuid())
-  title       String
-  excerpt     String
-  isPinned    Boolean  @default(false)
-  isLocked    Boolean  @default(false)
-  lastActive  DateTime @default(now())
-  createdAt   DateTime @default(now())
-  authorId    String
-  categoryId  String
-  
-  // Relations
-  author      User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  posts       Post[]
+  id         String   @id @default(cuid())
+  title      String
+  excerpt    String
+  authorId   String
+  categoryId String
+  lastActive DateTime @default(now())
+  isPinned   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  isLocked   Boolean  @default(false)
+  posts      Post[]
+  author     User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
   @@index([authorId])
   @@index([categoryId])
@@ -68,15 +58,13 @@ model Thread {
 
 model Post {
   id        String   @id @default(cuid())
-  text      String   @db.Text
+  text      String
   createdAt DateTime @default(now())
   authorId  String
   threadId  String
-  
-  // Relations
+  likes     Like[]
   author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
   thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
-  likes     Like[]
 
   @@index([authorId])
   @@index([threadId])
@@ -88,53 +76,48 @@ model Like {
   userId    String
   postId    String
   createdAt DateTime @default(now())
-  
-  // Relations
-  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  post      Post @relation(fields: [postId], references: [id], onDelete: Cascade)
-  
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@unique([userId, postId])
   @@index([userId])
   @@index([postId])
 }
 
 model ChatMessage {
-  id        String   @id @default(cuid())
-  text      String   @db.Text
-  createdAt DateTime @default(now())
+  id        String         @id @default(cuid())
+  text      String
+  createdAt DateTime       @default(now())
   authorId  String
+  edited    Boolean        @default(false)
+  author    User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
   reactions ChatReaction[]
-  
-  // Relations
-  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
 
   @@index([authorId])
   @@index([createdAt])
 }
 
 model ChatReaction {
-  id        String   @id @default(cuid())
-  message   ChatMessage @relation(fields: [messageId], references: [id])
+  id        String      @id @default(cuid())
   messageId String
-  user      User @relation(fields: [userId], references: [id])
   userId    String
   emoji     String
-  createdAt DateTime @default(now())
+  createdAt DateTime    @default(now())
+  message   ChatMessage @relation(fields: [messageId], references: [id])
+  user      User        @relation(fields: [userId], references: [id])
 
   @@unique([messageId, userId, emoji], name: "userReactionUnique")
 }
 
 model DMMessage {
   id        String   @id @default(cuid())
-  text      String   @db.Text
-  read      Boolean  @default(false)
+  text      String
   createdAt DateTime @default(now())
   fromId    String
   toId      String
-  
-  // Relations
-  from      User @relation("DMFrom", fields: [fromId], references: [id], onDelete: Cascade)
-  to        User @relation("DMTo", fields: [toId], references: [id], onDelete: Cascade)
+  read      Boolean  @default(false)
+  from      User     @relation("DMFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to        User     @relation("DMTo", fields: [toId], references: [id], onDelete: Cascade)
 
   @@index([fromId])
   @@index([toId])
@@ -145,15 +128,19 @@ model Notification {
   id        String   @id @default(cuid())
   type      String   @default("INFO")
   title     String
-  message   String   @db.Text
-  isRead    Boolean  @default(false)
+  message   String
   createdAt DateTime @default(now())
   userId    String
-  
-  // Relations
+  isRead    Boolean  @default(false)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([isRead])
   @@index([createdAt])
+}
+
+enum Role {
+  USER
+  MODERATOR
+  ADMIN
 }
