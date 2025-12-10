@@ -436,10 +436,29 @@ function handleSend() {
               <div className="flex items-center gap-2 mb-1">
                 <b>{msg.author?.username}</b>
                 <small className="text-white/50">
-                  {new Date(msg.createdAt).toLocaleTimeString("hu-HU", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
+                  {(() => {
+  const d = new Date(msg.createdAt);
+  const now = new Date();
+
+  const sameDay =
+    d.getDate() === now.getDate() &&
+    d.getMonth() === now.getMonth() &&
+    d.getFullYear() === now.getFullYear();
+
+  return sameDay
+    ? d.toLocaleTimeString("hu-HU", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : `${d.toLocaleDateString("hu-HU", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      })} ${d.toLocaleTimeString("hu-HU", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })}`;
+})()}
                 </small>
 
                 {/* Edit button */}
