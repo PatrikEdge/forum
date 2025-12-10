@@ -1,73 +1,88 @@
+export const dynamic = "force-dynamic";
+
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
-import { NextResponse as NextResp } from "next/server"; 
+import { wssBroadcast } from "@/lib/wsServer";
 
-export async function PUT(req: Request, context: { params: Promise<{ id: string }> }) {
+export async function PUT(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const user = await getUserFromRequest(req);
+  if (!user) {
+    return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+  }
+
+  // 🔥 Itt a fix
   const { id: messageId } = await context.params;
 
-  try {
-    const { text } = await req.json();
-    if (!messageId) return NextResp.json({ error: "Hiányzó üzenetazonosító." }, { status: 400 });
-    if (!text?.trim()) return NextResp.json({ error: "Hiányzó vagy érvénytelen szöveg." }, { status: 400 });
-
-    const user = await getUserFromRequest(req);
-    if (!user) return NextResp.json({ error: "Nincs azonosítva" }, { status: 401 });
-
-    const msg = await prisma.chatMessage.findUnique({ where: { id: messageId } });
-    if (!msg) return NextResp.json({ error: "Üzenet nem található" }, { status: 404 });
-    if (msg.authorId !== user.id && user.role === "USER") return NextResp.json({ error: "Nincs jogosultság" }, { status: 403 });
-
-    const updatedMsg = await prisma.chatMessage.update({
-  where: { id: messageId },
-  data: { text: text.trim(), edited: true },
-  include: {
-    author: {
-      select: {
-        id: true,
-        username: true,
-        avatarUrl: true,
-        role: true,
-      },
-    },
-  },
-});
-
-// 🔥 WebSocket broadcast
-globalThis.wsClients?.forEach((client) => {
-  try {
-    client.send(
-      JSON.stringify({
-        type: "chat_edit",
-        message: updatedMsg,
-      })
-    );
-  } catch {}
-});
-
-    return NextResp.json({ success: true, updatedMsg });
-  } catch (error) {
-    console.error("PUT ERROR:", error);
-    return NextResp.json({ error: "Szerverhiba" }, { status: 500 });
+  if (!messageId) {
+    return NextResponse.json({ error: "Hiányzó üzenet ID" }, { status: 400 });
   }
-}
 
-export async function DELETE(req: Request, context: { params: Promise<{ id: string }> }) {
-  const { id: messageId } = await context.params;
-
-  try {
-    if (!messageId) return NextResp.json({ error: "Hiányzó üzenetazonosító." }, { status: 400 });
-
-    const user = await getUserFromRequest(req);
-    if (!user) return NextResp.json({ error: "Not authenticated" }, { status: 401 });
-
-    const msg = await prisma.chatMessage.findUnique({ where: { id: messageId } });
-    if (!msg) return NextResp.json({ error: "Message not found" }, { status: 404 });
-    if (msg.authorId !== user.id && user.role === "USER") return NextResp.json({ error: "Forbidden" }, { status: 403 });
-
-    await prisma.chatMessage.delete({ where: { id: messageId } });
-    return NextResp.json({ success: true });
-  } catch (error) {
-    console.error("DELETE ERROR:", error);
-    return NextResp.json({ error: "Szerverhiba" }, { status: 500 });
+  const { text } = await req.json();
+  if (!text?.trim()) {
+    return NextResponse.json({ error: "Üres üzenet" }, { status: 400 });
   }
+
+  // 🔎 DM keresés
+  let msg = await prisma.dMMessage.findUnique({
+    where: { id: messageId },
+    include: { from: true, to: true },
+  });
+
+  let type: "dm" | "global" = "dm";
+
+  // 🔎 Global keresés
+  if (!msg) {
+    msg = await prisma.chatMessage.findUnique({
+      where: { id: messageId },
+      include: { author: true },
+    });
+    type = "global";
+  }
+
+  if (!msg) {
+    return NextResponse.json({ error: "Üzenet nem található" }, { status: 404 });
+  }
+
+  // 🔐 Jogosultság ellenőrzés
+  const myId = user.id;
+  const isOwner = type === "dm" ? msg.fromId === myId : msg.authorId === myId;
+
+  if (!isOwner) {
+    const dbUser = await prisma.user.findUnique({
+      where: { id: myId },
+      select: { role: true },
+    });
+
+    if (dbUser?.role !== "ADMIN" && dbUser?.role !== "MODERATOR") {
+      return NextResponse.json({ error: "Nincs jogosultságod szerkeszteni" }, { status: 403 });
+    }
+  }
+
+  // 🔧 UPDATE
+  let updated;
+  if (type === "dm") {
+    updated = await prisma.dMMessage.update({
+      where: { id: messageId },
+      data: { text: text.trim() },
+      include: { from: true, to: true },
+    });
+  } else {
+    updated = await prisma.chatMessage.update({
+      where: { id: messageId },
+      data: { text: text.trim(), edited: true },
+      include: { author: true },
+    });
+  }
+
+  // 📢 WS Broadcast
+  wssBroadcast({
+    type: type === "dm" ? "dm_edit" : "chat_edit",
+    message: updated,
+  });
+
+  return NextResponse.json({ message: updated });
 }

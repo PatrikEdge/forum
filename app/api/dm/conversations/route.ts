@@ -1,42 +1,58 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
 
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   const user = await getUserFromRequest(req);
-  if (!user) return NextResponse.json({ conversations: [] });
-
-  const messages = await prisma.dMMessage.findMany({
-    where: { OR: [{ fromId: user.id }, { toId: user.id }] },
-    orderBy: { createdAt: "desc" },
-  });
-
-  const users = new Map<string, {
-    userId: string;
-    username: string;
-    avatarUrl: string | null;
-    lastMessage: string;
-  }>();
-
-  for (const msg of messages) {
-    const otherUserId = msg.fromId === user.id ? msg.toId : msg.fromId;
-
-    if (!users.has(otherUserId)) {
-      const other = await prisma.user.findUnique({
-        where: { id: otherUserId },
-        select: { id: true, username: true, avatarUrl: true },
-      });
-
-      if (other) {
-        users.set(otherUserId, {
-          userId: other.id,
-          username: other.username,
-          avatarUrl: other.avatarUrl,
-          lastMessage: msg.text,
-        });
-      }
-    }
+  if (!user) {
+    return NextResponse.json({ conversations: [] }, { status: 401 });
   }
 
-  return NextResponse.json({ conversations: Array.from(users.values()) });
+  // 🔍 Találjuk meg az összes partner ID-t
+  const sent = await prisma.dMMessage.findMany({
+    where: { fromId: user.id },
+    select: { toId: true },
+  });
+
+  const received = await prisma.dMMessage.findMany({
+    where: { toId: user.id },
+    select: { fromId: true },
+  });
+
+  const partnerIds = Array.from(
+    new Set([
+      ...sent.map((m) => m.toId),
+      ...received.map((m) => m.fromId),
+    ])
+  ).filter((id) => id !== user.id);
+
+  // 🧠 Ha nincs még beszélgetés: üres lista
+  if (partnerIds.length === 0) {
+    return NextResponse.json({ conversations: [] });
+  }
+
+  // 👤 Töltsük le a partnerek adatait
+  const partners = await prisma.user.findMany({
+    where: { id: { in: partnerIds } },
+    select: { id: true, username: true, avatarUrl: true },
+  });
+
+  // 📩 Unread count per partner
+  const conversations = await Promise.all(
+    partners.map(async (partner) => {
+      const unreadCount = await prisma.dMMessage.count({
+        where: { fromId: partner.id, toId: user.id, read: false },
+      });
+
+      return {
+        user1Id: user.id,
+        user2Id: partner.id,
+        user1: { id: user.id, username: user.username, avatarUrl: user.avatarUrl },
+        user2: partner,
+        unreadCount,
+      };
+    })
+  );
+
+  return NextResponse.json({ conversations });
 }

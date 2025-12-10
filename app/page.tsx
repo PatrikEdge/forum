@@ -191,6 +191,7 @@ function GlobalChat({ user, messages, setMessages }: {
   const ws = useWebSocket();
   const [text, setText] = useState("");
   const [typingUser, setTypingUser] = useState<string | null>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
 
   // ---- Edit ----
   const [editMessage, setEditMessage] = useState<any>(null);
@@ -198,13 +199,33 @@ function GlobalChat({ user, messages, setMessages }: {
 
   const listRef = useRef<HTMLDivElement | null>(null);
 
+  useEffect(() => {
+  const el = listRef.current;
+  if (!el) return;
+
+  function onScroll() {
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 10;
+    setShowScrollButton(!atBottom);
+  }
+
+  el.addEventListener("scroll", onScroll);
+  return () => el.removeEventListener("scroll", onScroll);
+}, []);
+
   const REACTIONS = ["❤️", "😆", "👍", "😡", "😢", "😮"];
 
   // ---- Typing ----
   function sendTyping() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: "typing", chat: "global" }));
-  }
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(
+    JSON.stringify({
+      type: "typing",
+      chat: "global",
+      userId: user.id,
+      username: user.username,
+    })
+  );
+}
 
   // ---- Reaction Toggle (JAVÍTVA: REST API-t használ) ----
 function toggleReaction(messageId, emoji) {
@@ -309,12 +330,12 @@ function toggleReaction(messageId, emoji) {
 
         // 👀 Valaki ír
         if (data.type === "typing" && data.chat === "global") {
-          if (data.userId !== user.id) {
-            setTypingUser(data.username);
-            setTimeout(() => setTypingUser(null), 2500);
-          }
-          return;
-        }
+  if (data.userId !== user.id) {
+    setTypingUser(data.username);
+    setTimeout(() => setTypingUser(null), 2500);
+  }
+  return;
+}
 
         // 😀 Reakciók frissültek
         if (data.type === "chat_reaction") {
@@ -345,9 +366,18 @@ if (data.type === "chat_edit") {
 
   // ---- Auto-scroll ----
   useEffect(() => {
-    if (!listRef.current) return;
-    listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [messages]);
+  const el = listRef.current;
+  if (!el) return;
+
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
+
+  if (atBottom) {
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: "smooth",
+    });
+  }
+}, [messages]);
 
   // ---- SEND MESSAGE ----
 function handleSend() {
@@ -388,7 +418,7 @@ function handleSend() {
 }
 
   return (
-    <div className="flex flex-col h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
+    <div className="relative flex flex-col h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
       {/* HEADER */}
       <div className="border-b border-white/20 p-4">
         <h2 className="text-xl font-bold">🌍 Globális Chat</h2>
@@ -434,6 +464,13 @@ function handleSend() {
   >
     (szerkesztve)
   </small>
+)}
+
+{/* TYPING */}
+      {typingUser && (
+  <div className="p-2 text-sm text-white/70 italic animate-pulse">
+    💬 {typingUser} éppen ír...
+  </div>
 )}
 
               {/* REACTIONS */}
@@ -482,34 +519,51 @@ function handleSend() {
         })}
       </div>
 
-      {/* TYPING */}
-      {typingUser && (
-  <div className="p-2 text-sm text-white/70 italic animate-pulse">
-    💬 {typingUser} éppen ír...
-  </div>
+{/* Scroll To Bottom Button */}
+{showScrollButton && (
+  <button
+    onClick={() => {
+      if (listRef.current) {
+        listRef.current.scrollTo({
+  top: listRef.current.scrollHeight,
+  behavior: "smooth",
+});
+      }
+    }}
+    className="absolute right-4 bottom-20 bg-lime-500 text-black px-3 py-1 rounded-lg shadow-lg hover:bg-lime-600 transition z-50"
+  >
+    ↓ Ugrás az aljára
+  </button>
 )}
 
-      {/* INPUT BAR */}
-      <div className="border-t border-white/20 p-4 flex gap-2">
-        <input
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            sendTyping();
-          }}
-          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())}
-          placeholder="Írj üzenetet..."
-          className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-        />
+{/* INPUT BAR */}
+<div className="relative border-t border-white/20 p-4 flex gap-2 items-center">
 
-        <button
-          onClick={handleSend}
-          disabled={!text.trim()}
-          className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition flex items-center gap-2"
-        >
-          <Send className="w-4 h-4" /> Küldés
-        </button>
-      </div>
+  {/* Input */}
+  <input
+    value={text}
+    onChange={(e) => {
+      setText(e.target.value);
+      sendTyping();
+    }}
+    onKeyDown={(e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    }}
+    placeholder="Írj üzenetet..."
+    className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+  />
+
+{/* Send Button */}
+<button
+  onClick={handleSend}
+  disabled={!text.trim()}
+  className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition flex items-center gap-2"
+>
+  <Send className="w-4 h-4" /> Küldés
+</button>
 
       {/* EDIT POPUP */}
       {editMessage && (
@@ -541,8 +595,10 @@ function handleSend() {
         </div>
       )}
     </div>
+    </div>
   );
 }
+
 
 // ------------------------- Main Page -------------------------
 export default function ForumUI() {
@@ -610,11 +666,15 @@ export default function ForumUI() {
   const [searchUsers, setSearchUsers] = useState<any[]>([]);
   const [searchDMText, setSearchDMText] = useState("");
   const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [dmTypingUser, setDMTypingUser] = useState<string | null>(null);
+  const [editingDM, setEditingDM] = useState<any | null>(null);
+  const [editingDMText, setEditingDMText] = useState("");
 
   // Global Chat state
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [chatText, setChatText] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
   // Notifications state
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -642,57 +702,99 @@ export default function ForumUI() {
 }, []);
 
   // WS: presence + DM
-useEffect(() => {
-  if (!ws) return;
+  useEffect(() => {
+    if (!ws || !user) return;
 
-  function onMessage(ev: MessageEvent) {
-    try {
-      const data = JSON.parse(ev.data);
+    function onMessage(ev: MessageEvent) {
+      try {
+        const data = JSON.parse(ev.data as string);
 
-      if (data.type === "presence_snapshot") {
-        setOnlineUsers(Array.isArray(data.users) ? data.users : []);
+        // --- presence snapshot ---
+        if (data.type === "presence_snapshot") {
+          setOnlineUsers(Array.isArray(data.users) ? data.users : []);
 
-        fetch("/api/users/online")
-          .then(res => res.json())
-          .then(data => setAllUsers(data.users))
-          .catch(() => setAllUsers([]));
+          fetch("/api/users/online")
+            .then((res) => res.json())
+            .then((res) => setAllUsers(res.users))
+            .catch(() => setAllUsers([]));
 
-        return;
-      }
-
-      if (data.type === "presence_update") {
-        setOnlineUsers(prev => {
-          const set = new Set(prev);
-          if (data.status === "online") set.add(data.userId);
-          else if (data.status === "offline") set.delete(data.userId);
-          return Array.from(set);
-        });
-
-        fetch("/api/users/online")
-          .then(res => res.json())
-          .then(data => setAllUsers(data.users))
-          .catch(() => setAllUsers([]));
-
-        return;
-      }
-
-      if (data.type === "dm_message") {
-        const m = data.message;
-        if (activeDM && (m.fromId === activeDM || m.toId === activeDM)) {
-          setDMMessages((prev: any[]) => [...prev, m]);
+          return;
         }
-        loadDMUsers();
-        loadUnreadCounts();
-        return;
-      }
-    } catch (e) {
-      console.error("WS parse error", e);
-    }
-  }
 
-  ws.addEventListener("message", onMessage);
-  return () => ws.removeEventListener("message", onMessage);
-}, [ws, activeDM]);
+        // --- presence update ---
+        if (data.type === "presence_update") {
+          setOnlineUsers((prev) => {
+            const set = new Set(prev);
+            if (data.status === "online") set.add(data.userId);
+            else if (data.status === "offline") set.delete(data.userId);
+            return Array.from(set);
+          });
+
+          fetch("/api/users/online")
+            .then((res) => res.json())
+            .then((res) => setAllUsers(res.users))
+            .catch(() => setAllUsers([]));
+
+          return;
+        }
+
+        // --- DM érkezik ---
+        if (data.type === "dm_message") {
+          const m = data.message;
+          // ha épp ezt a partnert nézem, pusholjuk a listába
+          if (
+            activeDM &&
+            (String(m.fromId) === activeDM || String(m.toId) === activeDM)
+          ) {
+            setDMMessages((prev: any[]) => [...prev, m]);
+          }
+          // frissítsük a DM listát és az unread countot
+          loadDMUsers();
+          loadUnreadCounts();
+          return;
+        }
+
+        // --- DM typing ---
+        if (data.type === "dm_typing") {
+          if (activeDM && data.fromId === activeDM) {
+            setDMTypingUser(data.username ?? "Valaki");
+            setTimeout(() => setDMTypingUser(null), 2500);
+          }
+          return;
+        }
+
+        // --- DM read receipt ---
+        if (data.type === "dm_read") {
+          // partnerId = én, readerId = a másik
+          if (data.partnerId === user.id) {
+            setDMMessages((prev: any[]) =>
+              prev.map((m) =>
+                // az én üzeneteim lettek olvasva
+                m.fromId === user.id && m.toId === data.readerId
+                  ? { ...m, read: true }
+                  : m
+              )
+            );
+          }
+          return;
+        }
+
+        // --- DM edit ---
+        if (data.type === "dm_edit") {
+          const updated = data.message;
+          setDMMessages((prev: any[]) =>
+            prev.map((m) => (m.id === updated.id ? updated : m))
+          );
+          return;
+        }
+      } catch (e) {
+        console.error("WS parse error", e);
+      }
+    }
+
+    ws.addEventListener("message", onMessage);
+    return () => ws.removeEventListener("message", onMessage);
+  }, [ws, user?.id, activeDM]);
 
   // ------------------------- Fetchers -------------------------
   const loadCategories = async () => {
@@ -756,22 +858,19 @@ const loadConversation = async (userId: string) => {
   }
 };
 
-  const sendMessage = () => {
-    if (!dmText || !activeDM || !ws) return;
-    const text = dmText;
-    setDMText("");
+const sendMessage = () => {
+  if (!dmText || !activeDM) return;
+  const text = dmText.trim();
+  setDMText("");
 
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "dm_message", toId: activeDM, text }));
-      return;
-    }
-
-    fetch("/api/dm/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ toId: activeDM, text }),
-    }).then(() => loadConversation(activeDM));
-  };
+  fetch("/api/dm/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ toId: String(activeDM), text }),
+  })
+    .then(() => loadConversation(activeDM))
+    .catch(() => alert("Hiba történt az üzenet elküldésekor."));
+};
 
   const loadChatMessages = async () => {
     if (chatMessages.length > 0) {
@@ -1081,7 +1180,7 @@ const loadConversation = async (userId: string) => {
   }
 
   return (
-    <div className="flex min-h-screen w-full flex-col md:flex-row bg-gradient-to-br from-green-900 via-green-800 to-emerald-900 text-white">
+   <div className="flex h-screen w-full flex-col md:flex-row overflow-hidden bg-gradient-to-br from-green-900 via-green-800 to-emerald-900 text-white">
       <Sidebar
         activePage={activePage}
         setActivePage={setActivePage}
@@ -1089,7 +1188,7 @@ const loadConversation = async (userId: string) => {
         unreadDM={unreadDM}
       />
 
-      <div className="flex-1 p-4 md:p-6 flex flex-col gap-6">
+      <div className="flex-1 min-h-0 p-4 md:p-6 flex flex-col gap-6 overflow-hidden">
         <Topbar user={user} />
 
         {/* ------- Home Page ------- */}
@@ -1238,50 +1337,55 @@ const loadConversation = async (userId: string) => {
         )}
 
         {/* ------- Global Chat Page ------- */}
-        {activePage === "chat" && (
-          <GlobalChat user={user} messages={chatMessages} setMessages={setChatMessages} />
-        )}
+{activePage === "chat" && (
+  <div className="flex-1 flex flex-col min-h-0">
+    <GlobalChat 
+  user={user}
+  messages={chatMessages}
+  setMessages={setChatMessages}
+/>
+  </div>
+)}
 
         {/* ------- DM Page ------- */}
         {activePage === "dm" && (
             <div className="flex flex-col md:flex-row gap-4 md:gap-6 h-full">
                 {/* Conversations List */}
-                <div className="md:w-64 w-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 flex flex-col gap-4 md:h-full max-h-64 md:max-h-none overflow-y-auto">
-                    <h2 className="text-lg md:text-xl font-semibold mb-2">Beszélgetések</h2>
-                    <input
-                        type="text"
-                        value={searchDMText}
-                        onChange={(e) => handleUserSearch(e.target.value)}
-                        placeholder="Keresés..."
-                        className="w-full pl-3 pr-4 py-2 bg-white/20 border border-white/30 rounded-lg text-white placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-lime-400 mb-2"
-                    />
+<div className="md:w-64 w-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 flex flex-col gap-4 md:h-full max-h-64 md:max-h-none overflow-y-auto">
 
-                    {searchUsers.length > 0 && (
-                        <div className="border-b border-white/20 pb-2 mb-2">
-                            <p className="text-xs text-lime-300 mb-1">Keresési találatok:</p>
-                            {searchUsers.map((u: any) => (
-                                <button
-                                    key={u.id}
-                                    onClick={() => {
-                                        loadConversation(u.id);
-                                        setSearchDMText("");
-                                        setSearchUsers([]);
-                                    }}
-                                    className="w-full text-left justify-start text-white hover:bg-white/20 px-3 py-2 rounded-lg transition flex items-center gap-2"
-                                >
-                                    <User className="w-4 h-4" /> {u.username}
-                                </button>
-                            ))}
-                        </div>
-                    )}
+  <h2 className="text-lg md:text-xl font-semibold mb-2">Beszélgetések</h2>
 
-                    {/* ONLINE USERS */}
-<div className="border-b border-white/20 pb-2 mb-2">
-  <p className="text-xs text-lime-300 mb-1">Online felhasználók:</p>
+  <input
+    type="text"
+    value={searchDMText}
+    onChange={(e) => handleUserSearch(e.target.value)}
+    placeholder="Keresés..."
+    className="w-full pl-3 pr-4 py-2 bg-white/20 border border-white/30 rounded-lg text-white placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-lime-400 mb-2"
+  />
 
-  {onlineUsers
-    .filter(id => id !== user.id)
-    .map(id => {
+  {searchUsers.length > 0 && (
+    <div className="border-b border-white/20 pb-2 mb-2">
+      <p className="text-xs text-lime-300 mb-1">Keresési találatok:</p>
+      {searchUsers.map((u: any) => (
+        <button
+          key={u.id}
+          onClick={() => {
+            loadConversation(u.id);
+            setSearchDMText("");
+            setSearchUsers([]);
+          }}
+          className="w-full text-left justify-start text-white hover:bg-white/20 px-3 py-2 rounded-lg transition flex items-center gap-2"
+        >
+          <User className="w-4 h-4" /> {u.username}
+        </button>
+      ))}
+    </div>
+  )}
+
+  {/* ONLINE USERS */}
+  <div className="border-b border-white/20 pb-2 mb-2">
+    <p className="text-xs text-lime-300 mb-1">Online felhasználók:</p>
+    {onlineUsers.filter(id => id !== user.id).map(id => {
       const u = allUsers.find(us => us.id === id);
       if (!u) return null;
       return (
@@ -1294,31 +1398,45 @@ const loadConversation = async (userId: string) => {
         </button>
       );
     })}
+  </div>
+
+  {dmLoading ? (
+    <p className="text-white/50 italic">Betöltés...</p>
+  ) : dmUsers.length === 0 ? (
+    <p className="text-white/50 italic">Nincs aktív beszélgetés.</p>
+  ) : (
+    dmUsers.map((conv: any) => {
+      // 🔥 FIX: partner ellenőrzés
+      const partner = conv.user1Id === user.id ? conv.user2 : conv.user1;
+      if (!partner) return null; // 👈 ha hiányzik, nem rendereljük
+
+      const active = activeDM === partner.id;
+      const unread = conv.unreadCount > 0;
+
+      return (
+        <button
+          key={partner.id}
+          onClick={() => loadConversation(partner.id)}
+          className={`w-full text-left justify-start text-white hover:bg-white/20 px-3 py-2 rounded-lg transition flex items-center gap-2 ${
+            active ? "bg-white/20" : ""
+          }`}
+        >
+          <div
+            className={`w-3 h-3 rounded-full flex-shrink-0 ${
+              onlineUsers.includes(partner.id) ? "bg-lime-400" : "bg-white/40"
+            }`}
+          ></div>
+          <span className="truncate flex-1">{partner.username}</span>
+          {unread && (
+            <span className="w-4 h-4 rounded-full bg-red-500 text-[10px] flex items-center justify-center font-bold">
+              {conv.unreadCount}
+            </span>
+          )}
+        </button>
+      );
+    })
+  )}
 </div>
-                    
-                    {dmLoading ? (
-                        <p className="text-white/50 italic">Betöltés...</p>
-                    ) : dmUsers.length === 0 ? (
-                        <p className="text-white/50 italic">Nincs aktív beszélgetés.</p>
-                    ) : (
-                        dmUsers.map((conv: any) => {
-                            const partner = conv.user1Id === user.id ? conv.user2 : conv.user1;
-                            const active = activeDM === partner.id;
-                            const unread = conv.unreadCount > 0;
-                            return (
-                                <button
-                                    key={partner.id}
-                                    onClick={() => loadConversation(partner.id)}
-                                    className={`w-full text-left justify-start text-white hover:bg-white/20 px-3 py-2 rounded-lg transition flex items-center gap-2 ${active ? "bg-white/20" : ""}`}
-                                >
-                                    <div className={`w-3 h-3 rounded-full flex-shrink-0 ${onlineUsers.includes(partner.id) ? 'bg-lime-400' : 'bg-white/40'}`}></div>
-                                    <span className="truncate flex-1">{partner.username}</span>
-                                    {unread && <span className="w-4 h-4 rounded-full bg-red-500 text-[10px] flex items-center justify-center font-bold">{conv.unreadCount}</span>}
-                                </button>
-                            );
-                        })
-                    )}
-                </div>
 
                 {/* Message View */}
                 <div className="flex-1 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 overflow-hidden flex flex-col">
@@ -1329,7 +1447,31 @@ const loadConversation = async (userId: string) => {
                     ) : (
                         <>
                             <div className="border-b border-white/20 pb-3 mb-4">
-                                <h3 className="text-xl font-bold">Beszélgetés: {dmUsers.find((c: any) => c.user1Id === activeDM || c.user2Id === activeDM)?.user1?.username || dmUsers.find((c: any) => c.user1Id === activeDM || c.user2Id === activeDM)?.user2?.username || '...'}</h3>
+                                {/* DM Header */}
+{/* DM HEADER - Partner + Bezárás */}
+<div className="flex items-center justify-between border-b border-white/20 pb-3 mb-4">
+  {(() => {
+    const partner = allUsers.find((u: any) => u.id === activeDM);
+    return (
+      <h3 className="text-xl font-bold">
+        Beszélgetés: {partner?.username ?? "..."}
+      </h3>
+    );
+  })()}
+
+  <button
+    onClick={() => {
+      setActiveDM(null);
+      setDMMessages([]);
+      setDMTypingUser(null); 
+    }}
+    title="Bezárás"
+    className="p-2 bg-red-500/80 hover:bg-red-600 text-black rounded-lg transition flex items-center"
+  >
+    <X className="w-4 h-4" />
+  </button>
+</div>
+
                             </div>
                             
                             <div className="flex-1 overflow-y-auto flex flex-col gap-3 mb-4">
@@ -1341,7 +1483,7 @@ const loadConversation = async (userId: string) => {
                                             className={`p-2 rounded-lg max-w-[80%] ${isMe ? 'self-end bg-lime-700/50' : 'self-start bg-white/10'}`}
                                         >
                                             <div className="flex items-center gap-2 mb-1">
-                                                <b className={isMe ? 'text-lime-300' : ''}>{isMe ? 'Én' : msg.fromUser.username}</b>
+                                                <b className={isMe ? 'text-lime-300' : ''}>{isMe ? 'Én' : msg.from.username}</b>
                                                 <small className="text-white/50">
                                                     {new Date(msg.createdAt).toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit" })}
                                                 </small>
@@ -1568,6 +1710,7 @@ const loadConversation = async (userId: string) => {
             </div>
           </div>
         )}
+        
         
         {/* AVATAR CROPPER POPUP */}
         {showCropper && cropSrc && (

@@ -1,16 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
+import { wssBroadcast } from "@/lib/wsServer"; // path-ot igazítsd
 
-interface Params {
+interface RouteParams {
   params: { userId: string };
 }
 
-export async function GET(req: NextRequest, { params }: Params) {
+export async function GET(req: NextRequest, { params }: RouteParams) {
   const user = await getUserFromRequest(req);
-  if (!user) return NextResponse.json({ messages: [] }, { status: 401 });
+  if (!user) {
+    return NextResponse.json({ messages: [] }, { status: 401 });
+  }
 
   const otherId = params.userId;
+  if (!otherId) {
+    return NextResponse.json({ messages: [] }, { status: 400 });
+  }
 
   const messages = await prisma.dMMessage.findMany({
     where: {
@@ -20,9 +26,13 @@ export async function GET(req: NextRequest, { params }: Params) {
       ],
     },
     orderBy: { createdAt: "asc" },
+    include: {
+      from: true,
+      to: true,
+    },
   });
 
-  // Jelöld olvasottá a bejövő üzeneteket
+  // jelöld olvasottnak azokat, amiket a másik küldött nekem
   await prisma.dMMessage.updateMany({
     where: {
       fromId: otherId,
@@ -32,39 +42,31 @@ export async function GET(req: NextRequest, { params }: Params) {
     data: { read: true },
   });
 
-  return NextResponse.json({ messages });
-}
-
-export async function DELETE(req: NextRequest, { params }: Params) {
-  const user = await getUserFromRequest(req);
-  if (!user) {
-    return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
-  }
-
-  const messageId = params.id;
-
-  // Üzenet megkeresése
-  const message = await prisma.chatMessage.findUnique({
-    where: { id: messageId },
+  // read receipt a partnernek (WhatsApp stílus: két zöld pipa)
+  wssBroadcast({
+    type: "dm_read",
+    readerId: user.id,   // aki MOST olvasta
+    partnerId: otherId,  // akinek az üzeneteit olvasta
   });
 
-  if (!message) {
-    return NextResponse.json({ error: "Üzenet nem található" }, { status: 404 });
-  }
-
-  // Jogosultság ellenőrzés
-  const canDelete =
-    message.authorId === user.id ||
-    user.role === "MODERATOR" ||
-    user.role === "ADMIN";
-
-  if (!canDelete) {
-    return NextResponse.json({ error: "Nincs jogosultságod törölni" }, { status: 403 });
-  }
-
-  await prisma.chatMessage.delete({
-    where: { id: messageId },
+  return NextResponse.json({
+    messages: messages.map((m) => ({
+      id: m.id,
+      text: m.text,
+      fromId: m.fromId,
+      toId: m.toId,
+      createdAt: m.createdAt,
+      read: m.read,
+      fromUser: {
+        id: m.from.id,
+        username: m.from.username,
+        avatarUrl: m.from.avatarUrl,
+      },
+      toUser: {
+        id: m.to.id,
+        username: m.to.username,
+        avatarUrl: m.to.avatarUrl,
+      },
+    })),
   });
-
-  return NextResponse.json({ success: true });
 }
