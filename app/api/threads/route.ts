@@ -4,14 +4,21 @@ import { getUserFromRequest } from "@/lib/getUser";
 
 export async function GET(req: NextRequest) {
   const categoryId = req.nextUrl.searchParams.get("categoryId") || undefined;
+
   const threads = await prisma.thread.findMany({
     where: categoryId ? { categoryId } : {},
     include: {
       author: { select: { id: true, username: true } },
       category: true,
+      _count: {
+        select: {
+          posts: true,
+        },
+      },
     },
     orderBy: [{ isPinned: "desc" }, { lastActive: "desc" }],
   });
+
   return NextResponse.json({ threads });
 }
 

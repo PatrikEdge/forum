@@ -1,14 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
+import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(req: NextRequest) {
   const user = await getUserFromRequest(req);
-  if (!user) {
-    return NextResponse.json({ conversations: [] }, { status: 401 });
-  }
+  if (!user) return NextResponse.json({ conversations: [] }, { status: 401 });
 
-  // 🔍 Találjuk meg az összes partner ID-t
   const sent = await prisma.dMMessage.findMany({
     where: { fromId: user.id },
     select: { toId: true },
@@ -20,39 +17,50 @@ export async function GET(req: NextRequest) {
   });
 
   const partnerIds = Array.from(
-    new Set([
-      ...sent.map((m) => m.toId),
-      ...received.map((m) => m.fromId),
-    ])
-  ).filter((id) => id !== user.id);
+    new Set([...sent.map(m => m.toId), ...received.map(m => m.fromId)])
+  ).filter(id => id !== user.id);
 
-  // 🧠 Ha nincs még beszélgetés: üres lista
-  if (partnerIds.length === 0) {
+  if (partnerIds.length === 0)
     return NextResponse.json({ conversations: [] });
-  }
 
-  // 👤 Töltsük le a partnerek adatait
   const partners = await prisma.user.findMany({
     where: { id: { in: partnerIds } },
     select: { id: true, username: true, avatarUrl: true },
   });
 
-  // 📩 Unread count per partner
   const conversations = await Promise.all(
-    partners.map(async (partner) => {
-      const unreadCount = await prisma.dMMessage.count({
-        where: { fromId: partner.id, toId: user.id, read: false },
-      });
+  partners.map(async (partner) => {
+    const lastMessage = await prisma.dMMessage.findFirst({
+      where: {
+        OR: [
+          { fromId: user.id, toId: partner.id },
+          { fromId: partner.id, toId: user.id },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+    });
 
-      return {
-        user1Id: user.id,
-        user2Id: partner.id,
-        user1: { id: user.id, username: user.username, avatarUrl: user.avatarUrl },
-        user2: partner,
-        unreadCount,
-      };
-    })
-  );
+    const unreadCount = await prisma.dMMessage.count({
+      where: {
+        fromId: partner.id,
+        toId: user.id,
+        readAt: null,
+      },
+    });
 
-  return NextResponse.json({ conversations });
-}
+    return {
+      partner,
+      lastMessage,
+      unreadCount,
+    };
+  })
+);
+
+// 🔽 RENDEZÉS: legutóbbi üzenet legyen felül
+conversations.sort((a, b) => {
+  const aTime = a.lastMessage?.createdAt?.getTime() ?? 0;
+  const bTime = b.lastMessage?.createdAt?.getTime() ?? 0;
+  return bTime - aTime;
+});
+
+return NextResponse.json({ conversations });}

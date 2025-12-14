@@ -7,26 +7,35 @@ import { wssBroadcast } from "@/lib/wsServer";
 
 export async function PUT(
   req: NextRequest,
-  context: { params: Promise<{ id: string }> }
+  context: { params: Promise<{ messageId: string }> }
 ) {
   const user = await getUserFromRequest(req);
   if (!user) {
-    return NextResponse.json({ error: "Nem vagy bejelentkezve" }, { status: 401 });
+    return NextResponse.json(
+      { error: "Nem vagy bejelentkezve" },
+      { status: 401 }
+    );
   }
 
-  // 🔥 Itt a fix
-  const { id: messageId } = await context.params;
+  // 🔑 ITT A FONTOS RÉSZ: params await!
+  const { messageId } = await context.params;
 
   if (!messageId) {
-    return NextResponse.json({ error: "Hiányzó üzenet ID" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Hiányzó üzenet ID" },
+      { status: 400 }
+    );
   }
 
   const { text } = await req.json();
   if (!text?.trim()) {
-    return NextResponse.json({ error: "Üres üzenet" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Üres üzenet" },
+      { status: 400 }
+    );
   }
 
-  // 🔎 DM keresés
+  // 🔎 DM keresés – STRING ID
   let msg = await prisma.dMMessage.findUnique({
     where: { id: messageId },
     include: { from: true, to: true },
@@ -34,7 +43,7 @@ export async function PUT(
 
   let type: "dm" | "global" = "dm";
 
-  // 🔎 Global keresés
+  // 🔎 Globális chat keresés – STRING ID
   if (!msg) {
     msg = await prisma.chatMessage.findUnique({
       where: { id: messageId },
@@ -44,12 +53,16 @@ export async function PUT(
   }
 
   if (!msg) {
-    return NextResponse.json({ error: "Üzenet nem található" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Üzenet nem található" },
+      { status: 404 }
+    );
   }
 
-  // 🔐 Jogosultság ellenőrzés
+  // 🔐 Jogosultság
   const myId = user.id;
-  const isOwner = type === "dm" ? msg.fromId === myId : msg.authorId === myId;
+  const isOwner =
+    type === "dm" ? msg.fromId === myId : msg.authorId === myId;
 
   if (!isOwner) {
     const dbUser = await prisma.user.findUnique({
@@ -58,11 +71,14 @@ export async function PUT(
     });
 
     if (dbUser?.role !== "ADMIN" && dbUser?.role !== "MODERATOR") {
-      return NextResponse.json({ error: "Nincs jogosultságod szerkeszteni" }, { status: 403 });
+      return NextResponse.json(
+        { error: "Nincs jogosultságod szerkeszteni" },
+        { status: 403 }
+      );
     }
   }
 
-  // 🔧 UPDATE
+  // 🔧 UPDATE – STRING ID
   let updated;
   if (type === "dm") {
     updated = await prisma.dMMessage.update({
@@ -78,7 +94,7 @@ export async function PUT(
     });
   }
 
-  // 📢 WS Broadcast
+  // 📢 Broadcast
   wssBroadcast({
     type: type === "dm" ? "dm_edit" : "chat_edit",
     message: updated,

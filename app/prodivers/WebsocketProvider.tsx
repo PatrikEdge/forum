@@ -1,53 +1,83 @@
 "use client";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
-import { wssBroadcast } from "@/lib/wsBroadcast"; 
+
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 const WSContext = createContext<WebSocket | null>(null);
 
-export function WebSocketProvider({ children }: { children: React.ReactNode }) {
+type Props = {
+  children: React.ReactNode;
+};
+
+export function WebSocketProvider({ children }: Props) {
   const [ws, setWs] = useState<WebSocket | null>(null);
-  const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
-  const retry = useRef(1000);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryDelay = useRef<number>(1000); // ms – exponenciális backoff
 
-function connect() {
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const url = `${protocol}://${window.location.host}/ws`;
-
-  const socket = new WebSocket(url);
-  socket.withCredentials = true;
-
-  socket.onopen = () => {
-    console.log("WS Connected");
-    retry.current = 1000;
-    setWs(socket);
+  const clearReconnectTimer = () => {
+    if (reconnectTimer.current) {
+      clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
   };
 
-  socket.onclose = () => {
-    console.warn("WS Disconnected");
-    reconnect();
+  const connect = () => {
+    try {
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      // ha kell auth token, ide tudsz tenni query paramot pl. ?token=...
+      const url = `${protocol}://${window.location.host}/ws`;
+
+      const socket = new WebSocket(url);
+
+      socket.onopen = () => {
+        console.log("✅ WebSocket connected");
+        retryDelay.current = 1000;
+        setWs(socket);
+      };
+
+      socket.onclose = () => {
+        console.warn("⚠️ WebSocket closed, reconnecting...");
+        setWs(null);
+        scheduleReconnect();
+      };
+
+      socket.onerror = (err) => {
+        console.error("WebSocket error:", err);
+        // hiba esetén is zárjuk → onclose majd reconnectel
+        socket.close();
+      };
+    } catch (err) {
+      console.error("WebSocket connect error:", err);
+      scheduleReconnect();
+    }
   };
 
-  socket.onerror = () => {
-    socket.close();
-  };
-}
-
-  function reconnect() {
-    if (reconnectTimer.current) return;
+  const scheduleReconnect = () => {
+    if (reconnectTimer.current) return; // már várunk reconnectre
 
     reconnectTimer.current = setTimeout(() => {
       reconnectTimer.current = null;
-      retry.current = Math.min(retry.current * 2, 5000);
+      retryDelay.current = Math.min(retryDelay.current * 2, 5000);
       connect();
-    }, retry.current);
-  }
+    }, retryDelay.current);
+  };
 
-  // 👉 Try to connect once
   useEffect(() => {
     connect();
+
     return () => {
-      if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+      clearReconnectTimer();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
     };
+    // ⚠️ szándékosan NINCS ws a dependency-ben, különben reconnect loop
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return <WSContext.Provider value={ws}>{children}</WSContext.Provider>;

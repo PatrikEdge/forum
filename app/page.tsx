@@ -29,6 +29,31 @@ const createImage = (url: string): Promise<HTMLImageElement> =>
     image.src = url;
   });
 
+// 🔥 UGYANAZ, mint a Global Chat
+function formatChatDate(dateString: string) {
+  const d = new Date(dateString);
+  const now = new Date();
+
+  const sameDay =
+    d.getDate() === now.getDate() &&
+    d.getMonth() === now.getMonth() &&
+    d.getFullYear() === now.getFullYear();
+
+  return sameDay
+    ? d.toLocaleTimeString("hu-HU", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : `${d.toLocaleDateString("hu-HU", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      })} ${d.toLocaleTimeString("hu-HU", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })}`;
+}
+
 async function getCroppedImg(imageSrc: string, pixelCrop: any): Promise<Blob> {
   const image = await createImage(imageSrc);
   const canvas = document.createElement("canvas");
@@ -86,6 +111,42 @@ const useUser = () => {
 
   return { user, loading, refreshUser };
 };
+
+function ProfileStatsCard({ user }: { user: any }) {
+  const joinedAt = new Date(user.joinedAt);
+  const daysOnSite = Math.floor(
+    (Date.now() - joinedAt.getTime()) / (1000 * 60 * 60 * 24)
+  );
+
+  const stats = [
+    { label: "Posztok", value: user.postsCount ?? 0 },
+    { label: "Témák", value: user.threadsCount ?? 0 },
+    { label: "Kapott lájkok", value: user.likesReceived ?? 0 },
+    { label: "Napja tag", value: daysOnSite },
+  ];
+
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-xl p-6">
+      <h3 className="text-lg font-bold mb-4">📊 Statisztikák</h3>
+
+      <div className="grid grid-cols-2 gap-4">
+        {stats.map((s) => (
+          <div
+            key={s.label}
+            className="bg-black/30 rounded-lg p-4 text-center"
+          >
+            <p className="text-2xl font-bold text-lime-300">
+              {s.value}
+            </p>
+            <p className="text-xs text-white/60 mt-1">
+              {s.label}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 // ------------------------- Sidebar -------------------------
 function Sidebar({ activePage, setActivePage, unreadNotifications, unreadDM }: any) {
@@ -386,7 +447,7 @@ function handleSend() {
     setText("");
 
     // 1. Lokális azonnali megjelenítés (Local Echo)
-    const tempId = crypto.randomUUID(); 
+    const tempId = "temp-" + crypto.randomUUID();
     setMessages((prev) => [
       ...prev,
       {
@@ -462,12 +523,8 @@ function handleSend() {
                 </small>
 
                 {/* Edit button */}
-                {msg.authorId === user.id && (
-                  <button
-                    onClick={() => startEdit(msg)}
-                    className="text-xs text-blue-300 hover:text-blue-200"
-                    title="Szerkesztés"
-                  >
+                {msg.authorId === user.id && !String(msg.id).startsWith("temp-") && (
+                  <button onClick={() => startEdit(msg)} className="text-xs text-blue-300 hover:text-blue-200" title="Szerkesztés" >
                     ✏️
                   </button>
                 )}
@@ -497,7 +554,11 @@ function handleSend() {
                 {REACTIONS.map((emoji) => (
                   <button
   key={emoji}
-  onClick={() => toggleReaction(msg.id, emoji)}
+  onClick={() => {
+  if (String(msg.id).startsWith("temp-")) return; // vagy crypto id felismerése
+  toggleReaction(msg.id, emoji);
+}}
+
   className={
     "text-sm px-2 py-[1px] rounded-md transition " +
     (msg.reactions?.some(r => r.emoji === emoji && r.mine)
@@ -556,7 +617,7 @@ function handleSend() {
 )}
 
 {/* INPUT BAR */}
-<div className="relative border-t border-white/20 p-4 flex gap-2 items-center">
+<div className="shrink-0 border-t border-white/20 p-4 flex gap-2 items-center">
 
   {/* Input */}
   <input
@@ -583,6 +644,7 @@ function handleSend() {
 >
   <Send className="w-4 h-4" /> Küldés
 </button>
+</div>
 
       {/* EDIT POPUP */}
       {editMessage && (
@@ -611,9 +673,8 @@ function handleSend() {
               </button>
             </div>
           </div>
-        </div>
+</div>
       )}
-    </div>
     </div>
   );
 }
@@ -686,8 +747,77 @@ export default function ForumUI() {
   const [searchDMText, setSearchDMText] = useState("");
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [dmTypingUser, setDMTypingUser] = useState<string | null>(null);
-  const [editingDM, setEditingDM] = useState<any | null>(null);
-  const [editingDMText, setEditingDMText] = useState("");
+const [editingDM, setEditingDM] = useState<any | null>(null);
+const [editingDMText, setEditingDMText] = useState("");
+  const dmListRef = useRef<HTMLDivElement | null>(null);
+  const isAtBottomRef = useRef(true);
+
+  // 🔁 DM oldalra lépéskor mindig frissítjük a listát + badge-et
+useEffect(() => {
+  if (!user) return;
+  loadDMUsers();        // 🔥 mindig
+  loadUnreadCounts();  // 🔥 mindig
+}, [user]);
+
+useEffect(() => {
+  const el = dmListRef.current;
+  if (!el) return;
+
+  if (isAtBottomRef.current) {
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: "smooth",
+    });
+  }
+}, [dmMessages]);
+
+useEffect(() => {
+  const el = dmListRef.current;
+  if (!el) return;
+
+  useEffect(() => {
+  if (activePage !== "dm") return;
+  if (!activeDM) return;
+
+  // ⚠️ FONTOS: timeout + requestAnimationFrame
+  const t = setTimeout(() => {
+    requestAnimationFrame(() => {
+      const el = dmListRef.current;
+      if (!el) return;
+
+      el.scrollTop = el.scrollHeight;
+      isAtBottomRef.current = true;
+    });
+  }, 0);
+
+  return () => clearTimeout(t);
+}, [activePage, activeDM, dmMessages.length]);
+
+  
+  function onScroll() {
+    isAtBottomRef.current =
+      el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+  }
+
+  el.addEventListener("scroll", onScroll);
+  return () => el.removeEventListener("scroll", onScroll);
+}, []);
+
+
+// 🔁 BETÖLTÉSKOR
+useEffect(() => {
+  const saved = localStorage.getItem("activeDM");
+  if (saved) setActiveDM(saved);
+}, []);
+
+// 💾 VÁLTOZÁSKOR
+useEffect(() => {
+  if (activeDM) {
+    localStorage.setItem("activeDM", activeDM);
+  } else {
+    localStorage.removeItem("activeDM");
+  }
+}, [activeDM]);
 
   // Global Chat state
   const [chatMessages, setChatMessages] = useState<any[]>([]);
@@ -758,20 +888,57 @@ export default function ForumUI() {
         }
 
         // --- DM érkezik ---
-        if (data.type === "dm_message") {
-          const m = data.message;
-          // ha épp ezt a partnert nézem, pusholjuk a listába
-          if (
-            activeDM &&
-            (String(m.fromId) === activeDM || String(m.toId) === activeDM)
-          ) {
-            setDMMessages((prev: any[]) => [...prev, m]);
-          }
-          // frissítsük a DM listát és az unread countot
-          loadDMUsers();
-          loadUnreadCounts();
-          return;
-        }
+if (data.type === "dm_message") {
+  const partnerId =
+    data.message.fromId === user.id
+      ? data.message.toId
+      : data.message.fromId;
+
+  // 🔥 Conversations lista frissítése
+setDMUsers(prev => {
+  const exists = prev.find(c => c.partner.id === partnerId);
+
+  const updated = exists
+    ? prev.map(c =>
+        c.partner.id === partnerId
+          ? {
+              ...c,
+              lastMessage: data.message,
+              unreadCount:
+                activeDM === partnerId || data.message.fromId === user.id
+                  ? 0
+                  : c.unreadCount + 1,
+            }
+          : c
+      )
+    : [
+        {
+          partner:
+            data.message.fromId === user.id
+              ? data.message.to
+              : data.message.from,
+          lastMessage: data.message,
+          unreadCount: data.message.fromId === user.id ? 0 : 1,
+        },
+        ...prev,
+      ];
+
+  // 🔥 RENDEZÉS – legfrissebb felül
+  return updated.sort(
+    (a, b) =>
+      new Date(b.lastMessage?.createdAt || 0).getTime() -
+      new Date(a.lastMessage?.createdAt || 0).getTime()
+  );
+});
+
+  // 🔥 Aktív beszélgetés esetén azonnal megjelenik
+  if (activeDM === partnerId) {
+    setDMMessages(prev => [...prev, data.message]);
+  }
+
+  loadUnreadCounts();
+}
+
 
         // --- DM typing ---
         if (data.type === "dm_typing") {
@@ -798,22 +965,42 @@ export default function ForumUI() {
           return;
         }
 
-        // --- DM edit ---
-        if (data.type === "dm_edit") {
-          const updated = data.message;
-          setDMMessages((prev: any[]) =>
-            prev.map((m) => (m.id === updated.id ? updated : m))
-          );
-          return;
-        }
+        // ✏️ DM EDIT
+if (data.type === "dm_edit") {
+  setDMMessages(prev =>
+    prev.map(m =>
+      m.id === data.message.id ? data.message : m
+    )
+  );
+  return;
+}
+
+        // --- DM revoke ---
+if (data.type === "dm_revoke") {
+  setDMMessages(prev =>
+    prev.map(m =>
+      m.id === data.messageId
+        ? {
+            ...m,
+            revoked: true,
+            text: null,
+          }
+        : m
+    )
+  );
+  return;
+}
+
       } catch (e) {
         console.error("WS parse error", e);
       }
     }
+    
 
     ws.addEventListener("message", onMessage);
     return () => ws.removeEventListener("message", onMessage);
   }, [ws, user?.id, activeDM]);
+  
 
   // ------------------------- Fetchers -------------------------
   const loadCategories = async () => {
@@ -862,33 +1049,55 @@ export default function ForumUI() {
     setDMLoading(false);
   };
 
-const loadConversation = async (userId: string) => {
-  setActiveDM(userId);
+const loadConversation = async (partnerId: string) => {
   try {
-    const res = await fetch(`/api/dm/messages/${userId}`);
+    const res = await fetch(`/api/dm/messages/${partnerId}`);
     if (res.ok) {
       const data = await res.json();
       setDMMessages(data.messages || []);
     } else {
       setDMMessages([]);
     }
-  } catch (err) {
+  } catch {
     setDMMessages([]);
   }
 };
 
+
+
+useEffect(() => {
+  if (!activeDM) return;
+
+  loadConversation(activeDM);
+
+  fetch("/api/dm/read", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ partnerId: activeDM }),
+  });
+}, [activeDM]);
+
+
 const sendMessage = () => {
   if (!dmText || !activeDM) return;
+
+  const partnerId = activeDM; // 🔒 LEZÁRVA
   const text = dmText.trim();
   setDMText("");
 
   fetch("/api/dm/send", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ toId: String(activeDM), text }),
-  })
-    .then(() => loadConversation(activeDM))
-    .catch(() => alert("Hiba történt az üzenet elküldésekor."));
+    body: JSON.stringify({ toId: partnerId, text }),
+  }).catch(() => {
+    alert("Hiba történt az üzenet elküldésekor.");
+  });
+};
+
+const revokeDM = async (messageId: string) => {
+  await fetch(`/api/dm/message/${messageId}/revoke`, {
+    method: "POST",
+  });
 };
 
   const loadChatMessages = async () => {
@@ -950,17 +1159,20 @@ const sendMessage = () => {
     setNotifLoading(false);
   };
 
-  const markNotificationRead = async (notifId: string) => {
-    try {
-      await fetch(`/api/notifications/${notifId}/read`, {
-        method: "POST",
-      });
-      loadNotifications();
-      loadUnreadCounts();
-    } catch (err) {
-      console.error("Failed to mark notification read:", err);
-    }
-  };
+const markNotificationRead = async (notifId: string) => {
+  setUnreadNotifications(prev => Math.max(0, prev - 1));
+  setNotifications(prev =>
+    prev.map(n =>
+      n.id === notifId ? { ...n, isRead: true } : n
+    )
+  );
+
+  await fetch("/api/notifications/read", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: notifId }),
+  });
+};
 
   const clearAllNotifications = async () => {
     try {
@@ -974,18 +1186,17 @@ const sendMessage = () => {
     }
   };
 
-  const loadUnreadCounts = async () => {
-    try {
-      const res = await fetch("/api/unread-counts");
-      if (res.ok) {
-        const data = await res.json();
-        setUnreadNotifications(data.notifications || 0);
-        setUnreadDM(data.messages || 0);
-      }
-    } catch (err) {
-      console.error("Failed to load unread counts:", err);
-    }
-  };
+const loadUnreadCounts = async () => {
+  const res = await fetch("/api/unread-counts", {
+    cache: "no-store",
+  });
+
+  if (res.ok) {
+    const data = await res.json();
+    setUnreadNotifications(data.notifications || 0);
+    setUnreadDM(data.messages || 0);
+  }
+};
 
   const handleUserSearch = async (text: string) => {
     setSearchDMText(text);
@@ -1012,8 +1223,8 @@ const sendMessage = () => {
     setProfileEmail(user.email || "");
     loadUnreadCounts();
 
-    const interval = setInterval(loadUnreadCounts, 30000);
-    return () => clearInterval(interval);
+    //const interval = setInterval(loadUnreadCounts, 30000);
+    //return () => clearInterval(interval);
   }, [user]);
 
   useEffect(() => {
@@ -1025,6 +1236,12 @@ const sendMessage = () => {
       loadNotifications();
     }
   }, [activePage]);
+
+  useEffect(() => {
+  if (!user) return;
+  // 🔥 EZ A LÉNYEG:
+  loadDMUsers();
+}, [user]);
 
   useEffect(() => {
     loadCategories();
@@ -1088,17 +1305,31 @@ const sendMessage = () => {
   };
 
   const toggleLike = async (postId: string) => {
-    try {
-      await fetch("/api/posts/like", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ postId }),
-      });
-      if (activeThread) loadThread(activeThread.id);
-    } catch (err) {
-      console.error("Failed to toggle like:", err);
-    }
-  };
+  setPosts(prev =>
+    prev.map(p => {
+      if (p.id !== postId) return p;
+
+      const liked = p.userLiked;
+      return {
+        ...p,
+        userLiked: !liked,
+        likesCount: liked ? p.likesCount - 1 : p.likesCount + 1,
+      };
+    })
+  );
+
+  try {
+    await fetch("/api/posts/like", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ postId }),
+    });
+  } catch {
+    // rollback
+    if (activeThread) loadThread(activeThread.id);
+  }
+};
+
 
   const handleSaveProfile = async () => {
     if (!user) return;
@@ -1189,171 +1420,204 @@ const sendMessage = () => {
     setCropSrc(null);
   };
 
-  // ------------------------- Render -------------------------
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-900 via-green-800 to-emerald-900 text-white">
-        Betöltés...
-      </div>
-    );
-  }
-
+// ------------------------- Render -------------------------
+if (loading) {
   return (
-   <div className="flex h-screen w-full flex-col md:flex-row overflow-hidden bg-gradient-to-br from-green-900 via-green-800 to-emerald-900 text-white">
-      <Sidebar
-        activePage={activePage}
-        setActivePage={setActivePage}
-        unreadNotifications={unreadNotifications}
-        unreadDM={unreadDM}
-      />
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-900 via-green-800 to-emerald-900 text-white">
+      Betöltés...
+    </div>
+  );
+}
 
-      <div className="flex-1 min-h-0 p-4 md:p-6 flex flex-col gap-6 overflow-hidden">
-        <Topbar user={user} />
+return (
+  <div className="flex h-screen w-full flex-col md:flex-row overflow-hidden bg-gradient-to-br from-green-900 via-green-800 to-emerald-900 text-white">
+    <Sidebar
+      activePage={activePage}
+      setActivePage={setActivePage}
+      unreadNotifications={unreadNotifications}
+      unreadDM={unreadDM}
+    />
 
-        {/* ------- Home Page ------- */}
-        {activePage === "home" && (
-          <div className="flex flex-col md:flex-row gap-4 md:gap-6 h-full">
-            {/* Categories */}
-            <div className="md:w-64 w-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 flex flex-col gap-4 md:h-full max-h-64 md:max-h-none overflow-y-auto">
-              <div className="flex items-center justify-between mb-2">
-                <h2 className="text-lg md:text-xl font-semibold">Kategóriák</h2>
-                <button
-                  className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white text-xl transition"
-                  onClick={() => setShowNewTopicPopup(true)}
-                >
-                  +
-                </button>
-              </div>
+    {/* ================= MAIN CONTENT ================= */}
+    <div className="flex-1 min-h-0 p-4 md:p-6 flex flex-col gap-6 overflow-hidden">
+      <Topbar user={user} />
+
+      {/* ================= HOME ================= */}
+      {activePage === "home" && (
+        <div className="flex flex-col md:flex-row gap-4 md:gap-6 h-full">
+
+          {/* -------- Categories -------- */}
+          <div className="md:w-64 w-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 flex flex-col gap-4 md:h-full max-h-64 md:max-h-none overflow-y-auto">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-lg md:text-xl font-semibold">Kategóriák</h2>
               <button
-                className={`justify-start text-white hover:bg-white/20 px-4 py-2 rounded-lg transition ${
-                  selectedCategory === "all" ? "bg-white/20" : ""
-                }`}
-                onClick={() => setSelectedCategory("all")}
+                onClick={() => setShowNewTopicPopup(true)}
+                className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white text-xl transition"
               >
-                Összes
+                +
               </button>
-              {categories.map((cat) => (
-                <button
-                  key={cat.id}
-                  className={`justify-start text-white hover:bg-white/20 px-4 py-2 rounded-lg transition ${
-                    selectedCategory === cat.id ? "bg-white/20" : ""
-                  }`}
-                  onClick={() => setSelectedCategory(cat.id)}
-                >
-                  {cat.name}
-                </button>
-              ))}
             </div>
 
-            {/* Threads / Thread View */}
-            <div className="flex-1 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 overflow-y-auto">
-              {!activeThread && (
-                <>
-                  <h2 className="text-xl md:text-2xl font-bold mb-4">Legújabb témák</h2>
-                  <div className="flex flex-col gap-4">
-                    {threads.map((thread) => (
-                      <div
-                        key={thread.id}
-                        className="bg-white/10 backdrop-blur-xl border border-white/10 p-4 rounded-xl cursor-pointer hover:bg-white/20 transition"
-                        onClick={() => setActiveThread(thread)}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex-1">
-                            <h3 className="text-lg md:text-xl font-semibold mb-1">
-                              {thread.title}
-                            </h3>
-                            <p className="text-white/80 text-sm md:text-base mb-2">
-                              {thread.excerpt}
-                            </p>
-                            </div>
-                            <div className="text-sm md:text-base text-right flex-shrink-0">
-                                <p className="text-white/70">Hozzászólások: {thread.posts?.length ?? 0}</p>
-                                <p className="text-lime-300">{thread.category?.name ?? 'Kategória nélkül'}</p>
-                            </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
+            <button
+              onClick={() => setSelectedCategory("all")}
+              className={`px-4 py-2 rounded-lg transition ${
+                selectedCategory === "all"
+                  ? "bg-white/20"
+                  : "hover:bg-white/20"
+              }`}
+            >
+              Összes
+            </button>
 
-              {activeThread && (
-                <div className="flex flex-col gap-6">
-                  <button
-                    onClick={() => setActiveThread(null)}
-                    className="self-start text-sm text-lime-400 hover:text-lime-300 flex items-center gap-1"
-                  >
-                    ← Vissza a témákhoz
-                  </button>
-
-                  <h1 className="text-2xl md:text-3xl font-bold">{activeThread.title}</h1>
-                  <p className="text-white/80 text-sm md:text-base">
-                    Kategória: <span className="text-lime-300">{activeThread.category?.name ?? '?'}</span>
-                  </p>
-
-                  <div className="flex flex-col gap-6 border-t border-white/20 pt-6">
-                    {posts.map((post) => (
-                      <div key={post.id} className="bg-black/20 p-4 rounded-xl shadow-lg">
-                        <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-3">
-                                <div className="bg-white/20 w-8 h-8 rounded-full overflow-hidden flex items-center justify-center">
-                                    {post.author.avatarUrl ? (
-                                        <img src={post.author.avatarUrl} className="w-full h-full object-cover" alt="Avatar" />
-                                    ) : (
-                                        <span className="text-xs font-semibold">{post.author.username.charAt(0).toUpperCase()}</span>
-                                    )}
-                                </div>
-                                <span className="font-semibold text-lime-300">{post.author.username}</span>
-                                <small className="text-white/50">
-                                    {new Date(post.createdAt).toLocaleDateString("hu-HU")}
-                                </small>
-                            </div>
-                            
-                            <div className="flex items-center gap-2">
-                                {/* Like Count */}
-                                <div className="text-xs text-white/70 flex items-center gap-1">
-                                    <ThumbsUp className="w-3 h-3 text-red-400" />
-                                    {post.likes?.length ?? 0}
-                                </div>
-
-                                {/* Like Button */}
-                                <button
-                                    onClick={() => toggleLike(post.id)}
-                                    className={`p-1 rounded-full ${post.userLiked ? 'bg-red-500/80 hover:bg-red-600' : 'bg-white/10 hover:bg-white/20'}`}
-                                    title="Tetszik"
-                                >
-                                    <ThumbsUp className="w-4 h-4" />
-                                </button>
-                            </div>
-                        </div>
-
-                        <p className="whitespace-pre-wrap text-white/90">{post.text}</p>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Add Reply */}
-                  <div className="border-t border-white/20 pt-6 mt-6">
-                    <h3 className="text-xl font-bold mb-3">Válasz írása</h3>
-                    <textarea
-                      value={newReply}
-                      onChange={(e) => setNewReply(e.target.value)}
-                      placeholder="Írja ide a válaszát..."
-                      className="w-full h-32 bg-white/10 p-3 rounded-lg text-white placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-lime-400 mb-3"
-                    />
-                    <button
-                      onClick={handleAddReply}
-                      disabled={!newReply.trim()}
-                      className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-6 py-2 rounded-lg font-semibold transition"
-                    >
-                      Elküldés
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            {categories.map((cat) => (
+              <button
+                key={cat.id}
+                onClick={() => setSelectedCategory(cat.id)}
+                className={`px-4 py-2 rounded-lg transition ${
+                  selectedCategory === cat.id
+                    ? "bg-white/20"
+                    : "hover:bg-white/20"
+                }`}
+              >
+                {cat.name}
+              </button>
+            ))}
           </div>
-        )}
+
+          {/* -------- Threads / Thread View -------- */}
+          <div className="flex-1 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 overflow-y-auto">
+
+            {/* THREAD LIST */}
+            {!activeThread && (
+              <>
+                <h2 className="text-xl md:text-2xl font-bold mb-4">
+                  Legújabb témák
+                </h2>
+
+                <div className="flex flex-col gap-4">
+                  {threads.map((thread) => (
+                    <div
+                      key={thread.id}
+                      onClick={() => setActiveThread(thread)}
+                      className="bg-white/10 border border-white/10 p-4 rounded-xl cursor-pointer hover:bg-white/20 transition"
+                    >
+                      <div className="flex justify-between gap-2">
+                        <div className="flex-1">
+                          <h3 className="text-lg font-semibold mb-1">
+                            {thread.title}
+                          </h3>
+                          <p className="text-white/80 text-sm">
+                            {thread.excerpt}
+                          </p>
+                        </div>
+
+                        <div className="text-right text-sm">
+                          <p className="text-white/70">
+                            Hozzászólások: {thread._count?.posts ?? 0}
+                          </p>
+                          <p className="text-lime-300">
+                            {thread.category?.name ?? "Kategória nélkül"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* SINGLE THREAD */}
+            {activeThread && (
+              <div className="flex flex-col gap-6">
+                <button
+                  onClick={() => setActiveThread(null)}
+                  className="text-sm text-lime-400 hover:text-lime-300"
+                >
+                  ← Vissza a témákhoz
+                </button>
+
+                <h1 className="text-2xl font-bold">
+                  {activeThread.title}
+                </h1>
+
+                <p className="text-sm text-white/80">
+                  Kategória:{" "}
+                  <span className="text-lime-300">
+                    {activeThread.category?.name ?? "?"}
+                  </span>
+                </p>
+
+                <div className="flex flex-col gap-6 border-t border-white/20 pt-6">
+                  {posts.map((post) => (
+                    <div
+                      key={post.id}
+                      className="bg-black/20 p-4 rounded-xl"
+                    >
+                      <div className="flex justify-between mb-2">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center overflow-hidden">
+                            {post.author.avatarUrl ? (
+                              <img
+                                src={post.author.avatarUrl}
+                                alt=""
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <span className="text-xs font-semibold">
+                                {post.author.username[0].toUpperCase()}
+                              </span>
+                            )}
+                          </div>
+
+                          <span className="font-semibold text-lime-300">
+                            {post.author.username}
+                          </span>
+
+                          <small className="text-white/50">
+                            {new Date(post.createdAt).toLocaleDateString("hu-HU")}
+                          </small>
+                        </div>
+
+                        <button
+                          onClick={() => toggleLike(post.id)}
+                          className={`p-1 rounded-full ${
+                            post.userLiked
+                              ? "bg-red-500/80"
+                              : "bg-white/10 hover:bg-white/20"
+                          }`}
+                        >
+                          <ThumbsUp className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <p className="whitespace-pre-wrap text-white/90">
+                        {post.text}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* ADD REPLY */}
+                <div className="border-t border-white/20 pt-6">
+                  <h3 className="text-xl font-bold mb-3">Válasz írása</h3>
+                  <textarea
+                    value={newReply}
+                    onChange={(e) => setNewReply(e.target.value)}
+                    className="w-full h-32 bg-white/10 p-3 rounded-lg text-white"
+                  />
+                  <button
+                    onClick={handleAddReply}
+                    disabled={!newReply.trim()}
+                    className="mt-3 bg-lime-500 px-6 py-2 rounded-lg font-semibold text-black disabled:bg-white/20"
+                  >
+                    Elküldés
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
         {/* ------- Global Chat Page ------- */}
 {activePage === "chat" && (
@@ -1368,7 +1632,7 @@ const sendMessage = () => {
 
         {/* ------- DM Page ------- */}
         {activePage === "dm" && (
-            <div className="flex flex-col md:flex-row gap-4 md:gap-6 h-full">
+            <div className="flex-1 flex flex-col md:flex-row gap-4 md:gap-6 min-h-0 overflow-hidden">
                 {/* Conversations List */}
 <div className="md:w-64 w-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 flex flex-col gap-4 md:h-full max-h-64 md:max-h-none overflow-y-auto">
 
@@ -1389,10 +1653,11 @@ const sendMessage = () => {
         <button
           key={u.id}
           onClick={() => {
-            loadConversation(u.id);
-            setSearchDMText("");
-            setSearchUsers([]);
-          }}
+  setActiveDM(u.id);
+  setSearchDMText("");
+  setSearchUsers([]);
+}}
+
           className="w-full text-left justify-start text-white hover:bg-white/20 px-3 py-2 rounded-lg transition flex items-center gap-2"
         >
           <User className="w-4 h-4" /> {u.username}
@@ -1410,7 +1675,7 @@ const sendMessage = () => {
       return (
         <button
           key={u.id}
-          onClick={() => loadConversation(u.id)}
+          onClick={() => setActiveDM(u.id)}
           className="w-full text-left justify-start text-white hover:bg-lime-400/20 px-3 py-2 rounded-lg transition flex items-center gap-2"
         >
           <User className="w-4 h-4" /> {u.username}
@@ -1424,116 +1689,220 @@ const sendMessage = () => {
   ) : dmUsers.length === 0 ? (
     <p className="text-white/50 italic">Nincs aktív beszélgetés.</p>
   ) : (
-    dmUsers.map((conv: any) => {
-      // 🔥 FIX: partner ellenőrzés
-      const partner = conv.user1Id === user.id ? conv.user2 : conv.user1;
-      if (!partner) return null; // 👈 ha hiányzik, nem rendereljük
+dmUsers.map((conv: any) => {
+  const partner = conv.partner;
+  if (!partner) return null;
 
-      const active = activeDM === partner.id;
-      const unread = conv.unreadCount > 0;
+  const active = activeDM === partner.id;
+  const unread = conv.unreadCount > 0;
 
-      return (
-        <button
-          key={partner.id}
-          onClick={() => loadConversation(partner.id)}
-          className={`w-full text-left justify-start text-white hover:bg-white/20 px-3 py-2 rounded-lg transition flex items-center gap-2 ${
-            active ? "bg-white/20" : ""
-          }`}
-        >
-          <div
-            className={`w-3 h-3 rounded-full flex-shrink-0 ${
-              onlineUsers.includes(partner.id) ? "bg-lime-400" : "bg-white/40"
-            }`}
-          ></div>
-          <span className="truncate flex-1">{partner.username}</span>
-          {unread && (
-            <span className="w-4 h-4 rounded-full bg-red-500 text-[10px] flex items-center justify-center font-bold">
-              {conv.unreadCount}
-            </span>
-          )}
-        </button>
-      );
-    })
+  return (
+    <button
+      key={partner.id}
+      onClick={() => setActiveDM(partner.id)}
+      className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2 ${
+        active ? "bg-white/20" : "hover:bg-white/20"
+      }`}
+    >
+      <div
+        className={`w-3 h-3 rounded-full ${
+          onlineUsers.includes(partner.id)
+            ? "bg-lime-400"
+            : "bg-white/40"
+        }`}
+      />
+      <span className="truncate flex-1">{partner.username}</span>
+
+      {unread && (
+        <span className="w-4 h-4 rounded-full bg-red-500 text-[10px] flex items-center justify-center font-bold">
+          {conv.unreadCount}
+        </span>
+      )}
+    </button>
+  );
+})
   )}
 </div>
 
-                {/* Message View */}
-                <div className="flex-1 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 overflow-hidden flex flex-col">
-                    {!activeDM ? (
-                        <div className="flex-1 flex items-center justify-center text-white/50">
-                            Válasszon egy felhasználót a beszélgetéshez.
-                        </div>
-                    ) : (
-                        <>
-                            <div className="border-b border-white/20 pb-3 mb-4">
-                                {/* DM Header */}
-{/* DM HEADER - Partner + Bezárás */}
-<div className="flex items-center justify-between border-b border-white/20 pb-3 mb-4">
-  {(() => {
-    const partner = allUsers.find((u: any) => u.id === activeDM);
+{/* Message View */}
+<div className="flex-1 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 flex flex-col h-full overflow-hidden">
+  {!activeDM ? (
+    <div className="flex-1 flex items-center justify-center text-white/50">
+      Válasszon egy felhasználót a beszélgetéshez.
+    </div>
+  ) : (
+    <div className="flex flex-col flex-1 min-h-0">
+      {/* DM HEADER */}
+      <div className="flex items-center justify-between border-b border-white/20 pb-3 mb-4">
+        {(() => {
+          const partner = allUsers.find((u: any) => u.id === activeDM);
+          return (
+            <h3 className="text-xl font-bold">
+              Beszélgetés: {partner?.username ?? "..."}
+            </h3>
+          );
+        })()}
+
+        <button
+          onClick={() => {
+            setActiveDM(null);
+            setDMMessages([]);
+            setDMTypingUser(null);
+          }}
+          title="Bezárás"
+          className="p-2 bg-red-500/80 hover:bg-red-600 text-black rounded-lg transition flex items-center"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* DM EDIT POPUP */}
+{editingDM && (
+  <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+    <div className="bg-white/10 border border-white/20 backdrop-blur-xl p-4 rounded-2xl w-80">
+      <h3 className="font-semibold mb-2">Üzenet szerkesztése</h3>
+
+      <textarea
+        value={editingDMText}
+        onChange={(e) => setEditingDMText(e.target.value)}
+        className="w-full bg-black/30 p-2 rounded-lg text-white border border-white/30"
+        rows={3}
+      />
+
+      <div className="flex justify-end gap-2 mt-3">
+        <button
+          onClick={() => setEditingDM(null)}
+          className="text-white/70 hover:text-white"
+        >
+          Mégse
+        </button>
+
+        <button
+          onClick={async () => {
+            if (!editingDMText.trim()) return;
+
+            await fetch(`/api/dm/message/${editingDM.id}`, {
+  method: "PUT",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ text: editingDMText }),
+});
+
+            setEditingDM(null);
+            setEditingDMText("");
+          }}
+          className="bg-lime-500 px-3 py-1 rounded text-black hover:bg-lime-600"
+        >
+          Mentés
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* DM MESSAGES */}
+<div
+  ref={dmListRef}
+  className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 mb-4"
+>
+  {dmMessages.map((msg: any) => {
+    const isMe = msg.fromId === user.id;
+
     return (
-      <h3 className="text-xl font-bold">
-        Beszélgetés: {partner?.username ?? "..."}
-      </h3>
-    );
-  })()}
+      <div
+        key={msg.id}
+        className={`p-2 rounded-lg max-w-[80%] ${
+          isMe ? "self-end bg-lime-700/50" : "self-start bg-white/10"
+        }`}
+      >
+        {/* HEADER */}
+        <div className="flex items-center gap-2 mb-1">
+          <b className={isMe ? "text-lime-300" : ""}>
+            {isMe ? "Én" : msg.from?.username}
+          </b>
+          <small className="text-white/50">
+  {formatChatDate(msg.createdAt)}
+</small>
 
-  <button
-    onClick={() => {
-      setActiveDM(null);
-      setDMMessages([]);
-      setDMTypingUser(null); 
-    }}
-    title="Bezárás"
-    className="p-2 bg-red-500/80 hover:bg-red-600 text-black rounded-lg transition flex items-center"
-  >
-    <X className="w-4 h-4" />
-  </button>
-</div>
+        </div>
 
-                            </div>
-                            
-                            <div className="flex-1 overflow-y-auto flex flex-col gap-3 mb-4">
-                                {dmMessages.map((msg: any) => {
-                                    const isMe = msg.fromId === user.id;
-                                    return (
-                                        <div
-                                            key={msg.id}
-                                            className={`p-2 rounded-lg max-w-[80%] ${isMe ? 'self-end bg-lime-700/50' : 'self-start bg-white/10'}`}
-                                        >
-                                            <div className="flex items-center gap-2 mb-1">
-                                                <b className={isMe ? 'text-lime-300' : ''}>{isMe ? 'Én' : msg.from.username}</b>
-                                                <small className="text-white/50">
-                                                    {new Date(msg.createdAt).toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit" })}
-                                                </small>
-                                            </div>
-                                            <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
+        {/* TARTALOM */}
+        {msg.revoked ? (
+          <i className="text-white/50">Az üzenet visszavonva</i>
+        ) : (
+          <>
+            <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
 
-                            <div className="flex gap-2">
-                                <input
-                                    value={dmText}
-                                    onChange={(e) => setDMText(e.target.value)}
-                                    onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), sendMessage())}
-                                    placeholder="Írj privát üzenetet..."
-                                    className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-                                />
-                                <button
-                                    onClick={sendMessage}
-                                    disabled={!dmText.trim()}
-                                    className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition flex items-center gap-2"
-                                >
-                                    <Send className="w-4 h-4" /> Küldés
-                                </button>
-                            </div>
-                        </>
-                    )}
-                </div>
-            </div>
+            {msg.editCount > 0 && (
+              <div
+                className="text-[10px] text-white/40 mt-1"
+                title={`Szerkesztve: ${new Date(msg.editedAt).toLocaleString("hu-HU")}`}
+              >
+                (szerkesztve)
+              </div>
+            )}
+          </>
         )}
+
+        {/* ACTIONS */}
+        {isMe && !msg.revoked && (
+          <div className="flex gap-1 mt-1 opacity-70 hover:opacity-100 transition">
+            {(msg.editCount ?? 0) < 3 && (
+              <button
+                onClick={() => {
+                  setEditingDM(msg);
+                  setEditingDMText(msg.text ?? "");
+                }}
+                title={`Szerkesztés (${msg.editCount}/3)`}
+                className="p-1 rounded hover:bg-white/20 text-blue-300"
+              >
+                ✏️
+              </button>
+            )}
+
+            <button
+              onClick={() => revokeDM(msg.id)}
+              title="Üzenet visszavonása"
+              className="p-1 rounded hover:bg-red-500/20 text-red-400"
+            >
+              🗑️
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  })}
+</div>   {/* 🔥 EZ HIÁNYZOTT */}
+
+
+{/* DM INPUT */}
+<div className="flex gap-2 shrink-0">
+
+        <input
+          value={dmText}
+          onChange={(e) => setDMText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              sendMessage();
+            }
+          }}
+          placeholder="Írj privát üzenetet..."
+          className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+        />
+        <button
+          onClick={sendMessage}
+          disabled={!dmText.trim()}
+          className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition flex items-center gap-2"
+        >
+          <Send className="w-4 h-4" /> Küldés
+        </button>
+      </div>
+    </div>
+  )}
+</div>
+</div>
+        )}
+
         
         {/* ------- Notifications Page ------- */}
         {activePage === "notifications" && (
@@ -1558,17 +1927,25 @@ const sendMessage = () => {
                         {notifications.map((n: any) => (
                             <div 
                                 key={n.id} 
-                                className={`p-3 rounded-lg border ${n.read ? 'bg-white/5 border-white/10' : 'bg-lime-700/20 border-lime-500/50'}`}
+                                className={`p-3 rounded-lg border ${n.isRead ? 'bg-white/5 border-white/10' : 'bg-lime-700/20 border-lime-500/50'}`}
                             >
                                 <div className="flex items-start justify-between">
-                                    <p className="flex-1 text-sm md:text-base">
-                                        {n.text}
-                                    </p>
+                                    <div className="flex-1">
+  {n.title && (
+    <p className="font-semibold text-sm mb-0.5">
+      {n.title}
+    </p>
+  )}
+  <p className="text-sm md:text-base">
+    {n.message}
+  </p>
+</div>
+
                                     <button 
                                         onClick={() => markNotificationRead(n.id)}
                                         className="text-xs text-lime-400 hover:text-lime-300 ml-4 flex-shrink-0"
                                     >
-                                        {n.read ? 'Olvasott' : 'Megjelölés olvasottként'}
+                                        {n.isRead ? 'Olvasott' : 'Megjelölés olvasottként'}
                                     </button>
                                 </div>
                                 <small className="text-white/50 block mt-1">
@@ -1582,85 +1959,123 @@ const sendMessage = () => {
         )}
 
         {/* ------- Profile Page ------- */}
-        {activePage === "profile" && user && (
-            <div className="flex flex-col h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 overflow-y-auto">
-                <h2 className="text-xl md:text-2xl font-bold border-b border-white/20 pb-3 mb-4">Profil beállítások</h2>
+{activePage === "profile" && user && (
+  <div className="h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 overflow-y-auto">
+    <h2 className="text-xl md:text-2xl font-bold border-b border-white/20 pb-3 mb-6">
+      Profil beállítások
+    </h2>
 
-                {/* Status messages */}
-                {profileError && <div className="p-3 bg-red-600/50 rounded-lg text-red-200 mb-4">{profileError}</div>}
-                {profileSuccess && <div className="p-3 bg-lime-600/50 rounded-lg text-lime-200 mb-4">{profileSuccess}</div>}
+    {/* Status messages */}
+    {profileError && (
+      <div className="p-3 bg-red-600/50 rounded-lg text-red-200 mb-4">
+        {profileError}
+      </div>
+    )}
+    {profileSuccess && (
+      <div className="p-3 bg-lime-600/50 rounded-lg text-lime-200 mb-4">
+        {profileSuccess}
+      </div>
+    )}
 
-                <div className="flex items-center gap-6 mb-8">
-                    {/* Avatar Display */}
-                    <div className="relative w-24 h-24 rounded-full bg-black/50 overflow-hidden flex items-center justify-center border-4 border-lime-400/50">
-                        {user.avatarUrl ? (
-                            <img src={user.avatarUrl} className="w-full h-full object-cover" alt="Avatar" />
-                        ) : (
-                            <span className="text-4xl font-semibold">{user.username.charAt(0).toUpperCase()}</span>
-                        )}
+    {/* GRID */}
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-6xl mx-auto">
 
-                        {/* Avatar Upload Button */}
-                        <input
-                            type="file"
-                            accept="image/*"
-                            onChange={handleAvatarChange}
-                            className="absolute inset-0 opacity-0 cursor-pointer"
-                        />
-                    </div>
+      {/* ========== LEFT COLUMN ========== */}
+      <div className="lg:col-span-1 flex flex-col gap-6">
 
-                    <div className="text-lg">
-                        <p className="font-bold">{user.username}</p>
-                        <p className="text-sm text-lime-300">
-                            Szerepkör: {user.role === "MODERATOR" ? "Moderátor" : user.role === "ADMIN" ? "Admin" : "Felhasználó"}
-                        </p>
-                        <p className="text-sm text-white/70">Csatlakozott: {new Date(user.createdAt).toLocaleDateString("hu-HU")}</p>
-                    </div>
-                </div>
-
-                <div className="flex flex-col gap-4 max-w-lg">
-                    {/* Username */}
-                    <label className="block">
-                        <span className="text-white/70">Felhasználónév</span>
-                        <input
-                            type="text"
-                            value={profileUsername}
-                            onChange={(e) => setProfileUsername(e.target.value)}
-                            className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
-                        />
-                    </label>
-
-                    {/* Email */}
-                    <label className="block">
-                        <span className="text-white/70">Email cím</span>
-                        <input
-                            type="email"
-                            value={profileEmail}
-                            onChange={(e) => setProfileEmail(e.target.value)}
-                            className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
-                        />
-                    </label>
-
-                    {/* Password */}
-                    <label className="block">
-                        <span className="text-white/70">Új jelszó (Hagyja üresen, ha nem akarja megváltoztatni)</span>
-                        <input
-                            type="password"
-                            value={profilePassword}
-                            onChange={(e) => setProfilePassword(e.target.value)}
-                            className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
-                        />
-                    </label>
-                </div>
-
-                <button
-                    onClick={handleSaveProfile}
-                    disabled={savingProfile}
-                    className="mt-6 bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-6 py-2 rounded-lg font-semibold transition max-w-max"
-                >
-                    {savingProfile ? "Mentés..." : "Profil mentése"}
-                </button>
+        {/* Profile card */}
+        <div className="bg-white/5 rounded-xl p-6 border border-white/10">
+          <div className="flex flex-col items-center text-center gap-4">
+            <div className="relative w-28 h-28 rounded-full bg-black/50 overflow-hidden border-4 border-lime-400/50">
+              {user.avatarUrl ? (
+                <img
+                  src={user.avatarUrl}
+                  className="w-full h-full object-cover"
+                  alt="Avatar"
+                />
+              ) : (
+                <span className="text-4xl font-semibold">
+                  {user.username.charAt(0).toUpperCase()}
+                </span>
+              )}
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleAvatarChange}
+                className="absolute inset-0 opacity-0 cursor-pointer"
+              />
             </div>
-        )}
+
+            <div>
+              <p className="text-xl font-bold">{user.username}</p>
+              <p className="text-sm text-lime-300">
+                {user.role === "MODERATOR"
+                  ? "Moderátor"
+                  : user.role === "ADMIN"
+                  ? "Admin"
+                  : "Felhasználó"}
+              </p>
+              <p className="text-xs text-white/60 mt-1">
+                Csatlakozott:{" "}
+                {new Date(user.joinedAt).toLocaleDateString("hu-HU")}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* 🔥 Stats card – MOST JÓ HELYEN */}
+        <ProfileStatsCard user={user} />
+      </div>
+
+      {/* ========== RIGHT COLUMN ========== */}
+      <div className="lg:col-span-2 bg-white/5 rounded-xl p-6 border border-white/10">
+        <h3 className="text-xl font-bold mb-4">Profil adatok</h3>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <label className="block">
+            <span className="text-white/70">Felhasználónév</span>
+            <input
+              type="text"
+              value={profileUsername}
+              onChange={(e) => setProfileUsername(e.target.value)}
+              className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-white/70">Email cím</span>
+            <input
+              type="email"
+              value={profileEmail}
+              onChange={(e) => setProfileEmail(e.target.value)}
+              className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
+            />
+          </label>
+
+          <label className="block md:col-span-2">
+            <span className="text-white/70">
+              Új jelszó (hagyja üresen)
+            </span>
+            <input
+              type="password"
+              value={profilePassword}
+              onChange={(e) => setProfilePassword(e.target.value)}
+              className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
+            />
+          </label>
+        </div>
+
+        <button
+          onClick={handleSaveProfile}
+          disabled={savingProfile}
+          className="mt-6 bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-6 py-2 rounded-lg font-semibold transition"
+        >
+          {savingProfile ? "Mentés..." : "Profil mentése"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
         
         {/* NEW TOPIC POPUP */}
         {showNewTopicPopup && (
@@ -1777,10 +2192,11 @@ const sendMessage = () => {
                   Mentés
                 </button>
               </div>
+                            </div>
             </div>
-          </div>
         )}
+
       </div>
-    </div>
+    </div> 
   );
 }

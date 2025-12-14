@@ -1,27 +1,31 @@
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
 
-interface Params {
-  params: { id: string };
-}
-
-export async function POST(req: NextRequest, { params }: Params) {
+export async function POST(req: NextRequest) {
   const user = await getUserFromRequest(req);
   if (!user) {
-    return NextResponse.json(
-      { error: "Nem vagy bejelentkezve" },
-      { status: 401 }
-    );
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  await prisma.notification.updateMany({
+  const { id } = await req.json();
+
+  if (!id) {
+    return NextResponse.json({ error: "Missing id" }, { status: 400 });
+  }
+
+  await prisma.notification.update({
     where: {
-      id: params.id,
+      id,
       userId: user.id,
     },
-    data: { isRead: true },
+    data: {
+      isRead: true,
+    },
   });
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ ok: true });
 }

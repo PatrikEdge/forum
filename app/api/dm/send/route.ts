@@ -30,23 +30,23 @@ export async function POST(req: NextRequest) {
   });
 
   const messagePayload = {
-    id: saved.id,
-    text: saved.text,
-    fromId: saved.fromId,
-    toId: saved.toId,
-    createdAt: saved.createdAt,
-    read: saved.read,
-    fromUser: {
-      id: saved.from.id,
-      username: saved.from.username,
-      avatarUrl: saved.from.avatarUrl,
-    },
-    toUser: {
-      id: saved.to.id,
-      username: saved.to.username,
-      avatarUrl: saved.to.avatarUrl,
-    },
-  };
+  id: saved.id,
+  text: saved.text,
+  fromId: saved.fromId,
+  toId: saved.toId,
+  createdAt: saved.createdAt,
+  read: saved.readAt,
+  from: {
+    id: saved.from.id,
+    username: saved.from.username,
+    avatarUrl: saved.from.avatarUrl,
+  },
+  to: {
+    id: saved.to.id,
+    username: saved.to.username,
+    avatarUrl: saved.to.avatarUrl,
+  },
+};
 
   // Értesítés DB-be
   await prisma.notification.create({
@@ -58,11 +58,10 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  // Broadcast WS-en (hogy aki online, azonnal lássa)
   wssBroadcast({
-    type: "dm_message",
-    message: messagePayload,
-  });
+  type: "dm_message",
+  message: messagePayload,
+});
 
   return NextResponse.json({ message: messagePayload });
 }
