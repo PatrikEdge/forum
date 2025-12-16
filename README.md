@@ -1,36 +1,157 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+🌍 Global Chat – Funkciók összefoglaló
+💬 Alap chat funkciók
 
-## Getting Started
+Valós idejű globális üzenetküldés WebSocketen keresztül
 
-First, run the development server:
+Local echo: az üzenet azonnal megjelenik küldéskor
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+Automatikus deduplikáció (tempId → végleges ID csere)
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Hibás küldés kezelése:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+„Küldés…” státusz
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+„Sikertelen küldés” + Újraküldés gomb
 
-## Learn More
+Automatikus görgetés az aljára, ha ott vagy
 
-To learn more about Next.js, take a look at the following resources:
+„Ugrás az aljára” gomb új üzeneteknél
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Új üzenetek számlálója, ha nem alul vagy
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+⏰ Időkezelés
 
-## Deploy on Vercel
+Üzenetek dátum/idő formázása:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+aznapi üzenet → csak idő
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+régebbi → dátum + idő
+
+Üzenetre ugrás értesítésből (highlight + scroll)
+
+✏️ Üzenetszerkesztés
+
+Saját üzenetek szerkeszthetők
+
+Szerkesztett státusz megjelenítése
+
+WebSocketen szinkronizált szerkesztés
+
+Szerkesztés UI modalban
+
+😀 Reakciók
+
+Emoji reakciók (❤️ 😆 👍 😡 😢 😮)
+
+Reakció hozzáadás / eltávolítás
+
+Optimistic UI (azonnali visszajelzés)
+
+Reakciók számlálóval
+
+Tooltipben látszik, kik reagáltak
+
+Saját reakció kiemelve
+
+🧑‍🤝‍🧑 Felhasználói interakciók
+@Mention rendszer
+
+@username felismerés üzenetben
+
+Kattintható mention kiemeléssel
+
+Mention autocomplete gépelés közben
+
+Mention beszúrás billentyűzettel / kattintással
+
+Mini profil popup (hover)
+
+Felhasználónévre rámutatva:
+
+Avatar
+
+Username
+
+Szerepkör (User / Moderator / Admin)
+
+Utolsó aktivitás szövegesen
+
+„Profil megnyitása” gomb:
+
+Saját név → Profil oldal
+
+Más → Nagy profil popup
+
+Nagy profil popup
+
+Teljes felhasználói kártya:
+
+Avatar
+
+Szerepkör
+
+„X napja tag”
+
+Utolsó aktivitás
+
+Üzenet küldése gomb → DM-re ugrás
+
+⌨️ Gépelési visszajelzés
+
+„XY éppen ír…” jelzés
+
+Debounce-olt typing event
+
+Csak más felhasználókra jelenik meg
+
+🔔 Értesítések integráció
+
+Mention → értesítés
+
+Értesítésből:
+
+automatikus váltás Global Chatre
+
+üzenetre ugrás + kiemelés
+
+Olvasott / olvasatlan állapot kezelése
+
+🛡️ Stabilitás & UX
+
+WebSocket reconnect kompatibilis logika
+
+Scroll-pozíció megtartása
+
+UI animációk (fade, highlight)
+
+Mobile / desktop kompatibilis layout
+
+Hibatűrő fetch + WS kezelés
+
+🔒 Jogosultságok
+
+Csak saját üzenet:
+
+szerkeszthető
+
+Más üzenete:
+
+reakciózható
+
+Admin / Moderátor szerep vizuálisan jelölve
+
+🧠 Architektúra szempontból
+
+REST + WebSocket hibrid modell
+
+Skálázható szerkezet (DM, Notification, Presence már integrálva)
+
+Frontend oldalon elkülönített:
+
+hover logic
+
+popup logic
+
+mention logic
+
+chat state

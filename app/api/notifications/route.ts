@@ -23,6 +23,7 @@ export async function GET(req: NextRequest) {
       type: true,
       title: true,
       message: true,
+      meta: true,
       createdAt: true,
       isRead: true,
     },

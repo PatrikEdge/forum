@@ -86,6 +86,21 @@ async function getCroppedImg(imageSrc: string, pixelCrop: any): Promise<Blob> {
   });
 }
 
+// --------- LAST ACTIVE FORMATTER ---------
+function formatLastActive(date: string | null) {
+  if (!date) return "Nincs aktivitás";
+
+  const diffMs = Date.now() - new Date(date).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+
+  if (mins < 1) return "Épp most aktív";
+  if (mins < 60) return `${mins} perce aktív`;
+  if (hours < 24) return `${hours} órája aktív`;
+  return `${days} napja aktív`;
+}
+
 // ------------------------- useUser -------------------------
 const useUser = () => {
   const [user, setUser] = useState<any>(null);
@@ -113,10 +128,14 @@ const useUser = () => {
 };
 
 function ProfileStatsCard({ user }: { user: any }) {
+  if (!user || !user.joinedAt) return null;
   const joinedAt = new Date(user.joinedAt);
-  const daysOnSite = Math.floor(
-    (Date.now() - joinedAt.getTime()) / (1000 * 60 * 60 * 24)
-  );
+  const daysOnSite = user.joinedAt
+  ? Math.floor(
+      (Date.now() - new Date(user.joinedAt).getTime()) /
+        (1000 * 60 * 60 * 24)
+    )
+  : 0;
 
   const stats = [
     { label: "Posztok", value: user.postsCount ?? 0 },
@@ -244,18 +263,40 @@ function Topbar({ user }: any) {
   );
 }
 
-function GlobalChat({ user, messages, setMessages }: { 
-  user: any, 
-  messages: any[], 
-  setMessages: any 
+function GlobalChat({
+  user,
+  messages,
+  setMessages,
+  setViewedUser,
+  setActivePage,
+  setActiveConversationId,
+}: {
+  user: any;
+  messages: any[];
+  setMessages: any;
+  setViewedUser: (u: any | null) => void;
+  setActivePage: (p: string) => void;
+  setActiveConversationId: (id: string | null) => void;
 }) {
+
   const ws = useWebSocket();
   const [text, setText] = useState("");
   const [typingUser, setTypingUser] = useState<string | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const typingTimeout = useRef<NodeJS.Timeout | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+const [mentionResults, setMentionResults] = useState<any[]>([]);
+const [mentionIndex, setMentionIndex] = useState(0);
+const mentionBoxRef = useRef<HTMLDivElement | null>(null);
+const mentionAbortRef = useRef<AbortController | null>(null);
+const [hoverUser, setHoverUser] = useState<any | null>(null);
+const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
+const [hoverLock, setHoverLock] = useState(false);
+const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
 
   // ---- Edit ----
   const [editMessage, setEditMessage] = useState<any>(null);
@@ -279,6 +320,45 @@ function GlobalChat({ user, messages, setMessages }: {
   el.addEventListener("scroll", onScroll);
   return () => el.removeEventListener("scroll", onScroll);
 }, []);
+
+function renderMentions(text: string) {
+  return text.split(/(@[a-zA-Z0-9_]+)/g).map((part, i) => {
+    if (!part.startsWith("@")) return part;
+
+    const username = part.slice(1);
+
+    return (
+      <span
+        key={i}
+        className="text-lime-300 font-semibold cursor-pointer hover:underline"
+        onMouseEnter={async (e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+
+          setHoverPos({
+            x: rect.left + rect.width / 2,
+            y: rect.top,
+          });
+
+          try {
+            const res = await fetch(`/api/users/by-username/${username}`);
+            if (res.ok) {
+              const data = await res.json();
+              setHoverUser(data.user);
+            }
+          } catch {}
+        }}
+onMouseLeave={() => {
+  hoverTimeoutRef.current = setTimeout(() => {
+    setHoverUser(null);
+    setHoverPos(null);
+  }, 200);
+}}
+      >
+        {part}
+      </span>
+    );
+  });
+}
 
 // ---------------- FIRST LOAD → SCROLL TO BOTTOM ----------------
 useEffect(() => {
@@ -517,12 +597,40 @@ useEffect(() => {
   }
 }, [messages.length]);
 
+useEffect(() => {
+  function handler(e: any) {
+    const { messageId } = e.detail;
+
+    const el = document.getElementById(`msg-${messageId}`);
+    if (!el) return;
+
+    el.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+
+    setHighlightId(messageId);
+    setTimeout(() => setHighlightId(null), 3000);
+  }
+
+  window.addEventListener("jump_to_message", handler);
+  return () => window.removeEventListener("jump_to_message", handler);
+}, []);
+
 function showToast(message: string) {
   setToast(message);
 
   setTimeout(() => {
     setToast(null);
   }, 3000);
+}
+
+function insertMention(username: string) {
+  setText(prev =>
+    prev.replace(/@([a-zA-Z0-9_]{1,20})$/, `@${username} `)
+  );
+  setMentionQuery(null);
+  setMentionResults([]);
 }
 
   // ---- SEND MESSAGE ----
@@ -549,29 +657,30 @@ function handleSend() {
 
     // 2. REST API HÍVÁS A PERZISZTENCIÁHOZ (adatbázisba mentés)
     // EZ A HÍVÁS INDÍTJA EL A SZERVEROLDALI MENTÉST ÉS BROADCASTOT!
-    fetch("/api/chat/message", {
+fetch("/api/chat/message", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ text: msg, tempId }),
 })
-  .then(async (res) => {
+  .then((res) => {
     if (res.status === 429) {
-      // 🟡 RATE LIMIT UI
       setMessages((prev) =>
         prev.map((m) =>
           m.id === tempId ? { ...m, status: "failed" } : m
         )
       );
       showToast("Túl gyorsan írsz, várj pár másodpercet!");
-      throw new Error("Rate limited");
+      return;
     }
 
     if (!res.ok) {
-      throw new Error(await res.text());
+      throw new Error("Message send failed");
     }
+
+    // ✅ SIKER → SEMMIT nem csinálunk
+    // WS majd lecseréli a tempId-t
   })
   .catch(() => {
-    // 🔴 OPTIMISTIC ROLLBACK – NEM TÖRLÜNK
     setMessages((prev) =>
       prev.map((m) =>
         m.id === tempId ? { ...m, status: "failed" } : m
@@ -604,13 +713,12 @@ function resendMessage(msg: any) {
   });
 }
 
-
   return (
     <div className="relative flex flex-col h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
       {/* HEADER */}
       <div className="border-b border-white/20 p-4">
         <h2 className="text-xl font-bold">🌍 Globális Chat</h2>
-        <p className="text-sm text-white/70">Beszélgetés valós időben</p>
+        <p className="text-sm text-white/70">Beszélgetés valós időben</p>      
       </div>
 
       {/* MESSAGE LIST */}
@@ -618,11 +726,35 @@ function resendMessage(msg: any) {
         {messages.map((msg) => {
           return (
             <div
-              key={msg.id}
-              className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition"
-            >
+  id={`msg-${msg.id}`}
+  key={msg.id}
+  className={`p-2 rounded-lg transition ${
+    highlightId === msg.id
+      ? "bg-lime-500/30 ring-2 ring-lime-400"
+      : "bg-white/5 hover:bg-white/10"
+  }`}
+>
               <div className="flex items-center gap-2 mb-1">
-                <b>{msg.author?.username}</b>
+  <b
+    className="cursor-pointer hover:text-lime-300"
+    onMouseEnter={(e) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      setHoverUser(msg.author);
+      setHoverPos({
+        x: rect.left + rect.width / 2,
+        y: rect.top,
+      });
+    }}
+onMouseLeave={() => {
+  hoverTimeoutRef.current = setTimeout(() => {
+    setHoverUser(null);
+    setHoverPos(null);
+  }, 200);
+}}
+
+  >
+    {msg.author?.username}
+  </b>
                 <small className="text-white/50">
                   {(() => {
   const d = new Date(msg.createdAt);
@@ -657,7 +789,10 @@ function resendMessage(msg: any) {
                 )}
               </div>
 
-              <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
+              <div className="text-sm whitespace-pre-wrap">
+  {renderMentions(msg.text)}
+</div>
+
 
               {/* SEND STATUS */}
 {msg.status === "sending" && (
@@ -768,34 +903,123 @@ function resendMessage(msg: any) {
   </div>
 )}
 
-{/* INPUT BAR */}
-<div className="shrink-0 border-t border-white/20 p-4 flex gap-2 items-center">
+{/* ================= INPUT BAR ================= */}
+<div className="relative shrink-0 border-t border-white/20 p-4">
 
-  {/* Input */}
-  <input
-    value={text}
-    onChange={(e) => {
-      setText(e.target.value);
-      sendTyping();
-    }}
-    onKeyDown={(e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
-      }
-    }}
-    placeholder="Írj üzenetet..."
-    className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-  />
+  {/* @MENTION AUTOCOMPLETE */}
+  {mentionResults.length > 0 && (
+    <div className="absolute bottom-full mb-2 left-0 bg-black/90 border border-white/20 rounded-lg shadow-lg z-50 w-64">
+      {mentionResults.map((u, i) => (
+        <button
+          key={u.id}
+          onClick={() => insertMention(u.username)}
+          className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition ${
+            i === mentionIndex
+              ? "bg-lime-500/30"
+              : "hover:bg-white/10"
+          }`}
+        >
+          <div className="w-6 h-6 rounded-full bg-white/20 overflow-hidden">
+            {u.avatarUrl && (
+              <img
+                src={u.avatarUrl}
+                className="w-full h-full object-cover"
+              />
+            )}
+          </div>
+          @{u.username}
+        </button>
+      ))}
+    </div>
+  )}
 
-{/* Send Button */}
-<button
-  onClick={handleSend}
-  disabled={!text.trim()}
-  className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition flex items-center gap-2"
->
-  <Send className="w-4 h-4" /> Küldés
-</button>
+  <div className="flex items-center gap-2">
+
+    {/* INPUT */}
+    <input
+      value={text}
+      onChange={(e) => {
+        const value = e.target.value;
+        setText(value);
+        sendTyping();
+
+        const match = value.match(/@([a-zA-Z0-9_]{1,20})$/);
+        if (match) {
+          const q = match[1];
+          setMentionQuery(q);
+
+          mentionAbortRef.current?.abort();
+          const controller = new AbortController();
+          mentionAbortRef.current = controller;
+
+          fetch(`/api/users/mention-search?q=${q}`, {
+            signal: controller.signal,
+          })
+            .then(res => res.json())
+            .then(data => {
+              setMentionResults(
+                (data.users || []).filter((u: any) => u.id !== user.id)
+              );
+              setMentionIndex(0);
+            })
+            .catch(() => {});
+        } else {
+          setMentionQuery(null);
+          setMentionResults([]);
+        }
+      }}
+      onKeyDown={(e) => {
+        if (mentionResults.length > 0) {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setMentionIndex(i =>
+              Math.min(i + 1, mentionResults.length - 1)
+            );
+            return;
+          }
+
+          if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setMentionIndex(i => Math.max(i - 1, 0));
+            return;
+          }
+
+          if (e.key === "Enter") {
+            e.preventDefault();
+            insertMention(mentionResults[mentionIndex].username);
+            return;
+          }
+
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setText(prev =>
+              prev.replace(/@([a-zA-Z0-9_]{0,20})$/, "")
+            );
+            setMentionQuery(null);
+            setMentionResults([]);
+            return;
+          }
+        }
+
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          handleSend();
+        }
+      }}
+      placeholder="Írj üzenetet…"
+      className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+    />
+
+    {/* SEND */}
+    <button
+      onClick={handleSend}
+      disabled={!text.trim()}
+      className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition flex items-center gap-2 shrink-0"
+    >
+      <Send className="w-4 h-4" /> Küldés
+    </button>
+
+  </div>
 </div>
 
       {/* EDIT POPUP */}
@@ -827,6 +1051,81 @@ function resendMessage(msg: any) {
           </div>
 </div>
       )}
+      
+      {/* ===== MINI PROFILE POPUP ===== */}
+{hoverUser && hoverPos && (
+  <div
+    className="
+      fixed z-50
+      bg-black/90 border border-white/20
+      rounded-xl shadow-xl
+      px-4 py-3 w-56
+      text-sm
+      animate-fade-in
+      pointer-events-auto
+    "
+    style={{
+      left: hoverPos.x,
+      top: hoverPos.y - 10,
+      transform: "translate(-50%, -100%)",
+    }}
+    onMouseEnter={() => {
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+        hoverTimeoutRef.current = null;
+      }
+    }}
+    onMouseLeave={() => {
+      setHoverUser(null);
+      setHoverPos(null);
+    }}
+  >
+    <div className="flex items-center gap-3">
+      <div className="w-10 h-10 rounded-full bg-white/20 overflow-hidden">
+        {hoverUser.avatarUrl ? (
+          <img
+            src={hoverUser.avatarUrl}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center font-bold">
+            {hoverUser.username[0].toUpperCase()}
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1">
+        <p className="font-semibold">{hoverUser.username}</p>
+        <p className="text-xs text-lime-300">
+          {hoverUser.role === "ADMIN"
+            ? "Admin"
+            : hoverUser.role === "MODERATOR"
+            ? "Moderátor"
+            : "Felhasználó"}
+        </p>
+      </div>
+    </div>
+
+    {/* 👉 KATTINTHATÓ PROFIL */}
+    <button
+onClick={() => {
+  if (hoverUser.id === user.id) {
+    // 👉 saját profil → oldal
+    setViewedUser(null);
+    setActivePage("profile");
+  } else {
+    // 👉 más profil → popup
+    setViewedUser(hoverUser);
+  }
+  setHoverUser(null);
+}}
+      className="mt-3 w-full text-center text-xs bg-lime-500/80 hover:bg-lime-500 text-black rounded-md py-1 font-semibold transition"
+    >
+      Profil megnyitása
+    </button>
+  </div>
+)}
+      {/* ===== / MINI PROFILE POPUP ===== */}
     </div>
   );
 }
@@ -884,6 +1183,8 @@ export default function ForumUI() {
   // Profile state
   const [profileUsername, setProfileUsername] = useState("");
   const [profileEmail, setProfileEmail] = useState("");
+  const [viewedUser, setViewedUser] = useState<any | null>(null);
+  const [viewedUserLoading, setViewedUserLoading] = useState(false);
   const [profilePassword, setProfilePassword] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
@@ -1087,17 +1388,15 @@ setDMUsers(prev => {
   if (activeConversationId === partnerId) {
     setDMMessages(prev => [...prev, data.message]);
   }
+  loadUnreadCounts();
+}
 
-  // 🔔 NOTIFICATION (MENTION)
+// 🔔 GLOBAL NOTIFICATION (MENTION, SYSTEM, ETC.)
 if (data.type === "notification") {
   setNotifications(prev => [data.notification, ...prev]);
   setUnreadNotifications(prev => prev + 1);
   return;
 }
-
-  loadUnreadCounts();
-}
-
 
         // --- DM typing ---
         if (data.type === "dm_typing") {
@@ -1777,10 +2076,13 @@ return (
         {/* ------- Global Chat Page ------- */}
 {activePage === "chat" && (
   <div className="flex-1 flex flex-col min-h-0">
-    <GlobalChat 
+<GlobalChat 
   user={user}
   messages={chatMessages}
   setMessages={setChatMessages}
+  setViewedUser={setViewedUser}        // ✅ ADD HOZZÁ
+  setActivePage={setActivePage}        // ✅ ADD HOZZÁ
+  setActiveConversationId={setActiveConversationId} // (opcionális, később kell)
 />
   </div>
 )}
@@ -1830,7 +2132,7 @@ return (
       return (
         <button
           key={u.id}
-          onClick={() => activeConversationId(u.id)}
+          onClick={() => setActiveConversationId(u.id)}
           className="w-full text-left justify-start text-white hover:bg-lime-400/20 px-3 py-2 rounded-lg transition flex items-center gap-2"
         >
           <User className="w-4 h-4" /> {u.username}
@@ -2080,10 +2382,34 @@ dmUsers.map((conv: any) => {
                 ) : (
                     <div className="flex flex-col gap-3">
                         {notifications.map((n: any) => (
-                            <div 
-                                key={n.id} 
-                                className={`p-3 rounded-lg border ${n.isRead ? 'bg-white/5 border-white/10' : 'bg-lime-700/20 border-lime-500/50'}`}
-                            >
+                            <div
+  key={n.id}
+  onClick={() => {
+    if (n.meta?.chat === "global" && n.meta?.messageId) {
+      // 1️⃣ átváltás global chatre
+      setActivePage("chat");
+
+      // 2️⃣ késleltetett esemény (chat már mountoljon!)
+      setTimeout(() => {
+        window.dispatchEvent(
+          new CustomEvent("jump_to_message", {
+            detail: {
+              messageId: n.meta.messageId,
+            },
+          })
+        );
+      }, 300);
+    }
+
+    // 3️⃣ olvasottra állítás
+    markNotificationRead(n.id);
+  }}
+  className={`cursor-pointer p-3 rounded-lg border transition ${
+    n.isRead
+      ? "bg-white/5 border-white/10"
+      : "bg-lime-700/20 border-lime-500/50 hover:bg-lime-700/30"
+  }`}
+>
                                 <div className="flex items-start justify-between">
                                     <div className="flex-1">
   {n.title && (
@@ -2113,124 +2439,163 @@ dmUsers.map((conv: any) => {
             </div>
         )}
 
-        {/* ------- Profile Page ------- */}
-{activePage === "profile" && user && (
-  <div className="h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 overflow-y-auto">
-    <h2 className="text-xl md:text-2xl font-bold border-b border-white/20 pb-3 mb-6">
-      Profil beállítások
-    </h2>
+{/* ------- Profile Page ------- */}
+{activePage === "profile" && viewedUser === null && (() => {
+  const profileUser = viewedUser ?? user;
+  const isOwnProfile = !viewedUser;
 
-    {/* Status messages */}
-    {profileError && (
-      <div className="p-3 bg-red-600/50 rounded-lg text-red-200 mb-4">
-        {profileError}
-      </div>
-    )}
-    {profileSuccess && (
-      <div className="p-3 bg-lime-600/50 rounded-lg text-lime-200 mb-4">
-        {profileSuccess}
-      </div>
-    )}
+  const joinedAt = profileUser?.joinedAt
+    ? new Date(profileUser.joinedAt)
+    : null;
 
-    {/* GRID */}
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-6xl mx-auto">
+  const daysAsMember =
+  profileUser?.joinedAt
+    ? Math.floor(
+        (Date.now() - new Date(profileUser.joinedAt).getTime()) /
+          86_400_000
+      )
+    : null;
 
-      {/* ========== LEFT COLUMN ========== */}
-      <div className="lg:col-span-1 flex flex-col gap-6">
+  return (
+    <div className="h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 overflow-y-auto">
+      <h2 className="text-xl md:text-2xl font-bold border-b border-white/20 pb-3 mb-6">
+        Profil
+      </h2>
 
-        {/* Profile card */}
-        <div className="bg-white/5 rounded-xl p-6 border border-white/10">
-          <div className="flex flex-col items-center text-center gap-4">
-            <div className="relative w-28 h-28 rounded-full bg-black/50 overflow-hidden border-4 border-lime-400/50">
-              {user.avatarUrl ? (
-                <img
-                  src={user.avatarUrl}
-                  className="w-full h-full object-cover"
-                  alt="Avatar"
-                />
-              ) : (
-                <span className="text-4xl font-semibold">
-                  {user.username.charAt(0).toUpperCase()}
-                </span>
+      {/* Status messages – csak saját profilnál */}
+      {isOwnProfile && profileError && (
+        <div className="p-3 bg-red-600/50 rounded-lg text-red-200 mb-4">
+          {profileError}
+        </div>
+      )}
+      {isOwnProfile && profileSuccess && (
+        <div className="p-3 bg-lime-600/50 rounded-lg text-lime-200 mb-4">
+          {profileSuccess}
+        </div>
+      )}
+
+      {/* GRID */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-6xl mx-auto">
+
+        {/* ========== LEFT COLUMN ========== */}
+        <div className="lg:col-span-1 flex flex-col gap-6">
+
+          {/* Profile card */}
+          <div className="bg-white/5 rounded-xl p-6 border border-white/10">
+            <div className="flex flex-col items-center text-center gap-4">
+              <div className="relative w-28 h-28 rounded-full bg-black/50 overflow-hidden border-4 border-lime-400/50">
+                {profileUser.avatarUrl ? (
+                  <img
+                    src={profileUser.avatarUrl}
+                    className="w-full h-full object-cover"
+                    alt="Avatar"
+                  />
+                ) : (
+                  <span className="text-4xl font-semibold">
+                    {profileUser.username.charAt(0).toUpperCase()}
+                  </span>
+                )}
+
+                {/* Avatar csere CSAK saját profilnál */}
+                {isOwnProfile && (
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleAvatarChange}
+                    className="absolute inset-0 opacity-0 cursor-pointer"
+                  />
+                )}
+              </div>
+
+              <div>
+                <p className="text-xl font-bold">
+                  {profileUser.username}
+                </p>
+                <p className="text-sm text-lime-300">
+                  {profileUser.role === "MODERATOR"
+                    ? "Moderátor"
+                    : profileUser.role === "ADMIN"
+                    ? "Admin"
+                    : "Felhasználó"}
+                </p>
+                <p className="text-xs text-white/60 mt-1">
+                  Csatlakozott:{" "}
+                  {new Date(profileUser.joinedAt).toLocaleDateString("hu-HU")}
+                </p>
+              </div>
+
+              {/* 🔥 ÜZENET GOMB – csak más profilnál */}
+              {!isOwnProfile && (
+                <button
+                  onClick={() => {
+                    setActiveConversationId(profileUser.id);
+                    setActivePage("dm");
+                    setViewedUser(null);
+                  }}
+                  className="mt-4 w-full bg-lime-500 hover:bg-lime-600 text-black rounded-lg py-2 font-semibold transition"
+                >
+                  💬 Üzenet küldése
+                </button>
               )}
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleAvatarChange}
-                className="absolute inset-0 opacity-0 cursor-pointer"
-              />
-            </div>
-
-            <div>
-              <p className="text-xl font-bold">{user.username}</p>
-              <p className="text-sm text-lime-300">
-                {user.role === "MODERATOR"
-                  ? "Moderátor"
-                  : user.role === "ADMIN"
-                  ? "Admin"
-                  : "Felhasználó"}
-              </p>
-              <p className="text-xs text-white/60 mt-1">
-                Csatlakozott:{" "}
-                {new Date(user.joinedAt).toLocaleDateString("hu-HU")}
-              </p>
             </div>
           </div>
+
+          {/* Stats */}
+          <ProfileStatsCard user={profileUser} />
         </div>
 
-        {/* 🔥 Stats card – MOST JÓ HELYEN */}
-        <ProfileStatsCard user={user} />
-      </div>
+        {/* ========== RIGHT COLUMN – CSAK SAJÁT PROFIL ========== */}
+        {isOwnProfile && (
+          <div className="lg:col-span-2 bg-white/5 rounded-xl p-6 border border-white/10">
+            <h3 className="text-xl font-bold mb-4">Profil adatok</h3>
 
-      {/* ========== RIGHT COLUMN ========== */}
-      <div className="lg:col-span-2 bg-white/5 rounded-xl p-6 border border-white/10">
-        <h3 className="text-xl font-bold mb-4">Profil adatok</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <label className="block">
+                <span className="text-white/70">Felhasználónév</span>
+                <input
+                  type="text"
+                  value={profileUsername}
+                  onChange={(e) => setProfileUsername(e.target.value)}
+                  className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
+                />
+              </label>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <label className="block">
-            <span className="text-white/70">Felhasználónév</span>
-            <input
-              type="text"
-              value={profileUsername}
-              onChange={(e) => setProfileUsername(e.target.value)}
-              className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
-            />
-          </label>
+              <label className="block">
+                <span className="text-white/70">Email cím</span>
+                <input
+                  type="email"
+                  value={profileEmail}
+                  onChange={(e) => setProfileEmail(e.target.value)}
+                  className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
+                />
+              </label>
 
-          <label className="block">
-            <span className="text-white/70">Email cím</span>
-            <input
-              type="email"
-              value={profileEmail}
-              onChange={(e) => setProfileEmail(e.target.value)}
-              className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
-            />
-          </label>
+              <label className="block md:col-span-2">
+                <span className="text-white/70">
+                  Új jelszó (hagyja üresen)
+                </span>
+                <input
+                  type="password"
+                  value={profilePassword}
+                  onChange={(e) => setProfilePassword(e.target.value)}
+                  className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
+                />
+              </label>
+            </div>
 
-          <label className="block md:col-span-2">
-            <span className="text-white/70">
-              Új jelszó (hagyja üresen)
-            </span>
-            <input
-              type="password"
-              value={profilePassword}
-              onChange={(e) => setProfilePassword(e.target.value)}
-              className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
-            />
-          </label>
-        </div>
-
-        <button
-          onClick={handleSaveProfile}
-          disabled={savingProfile}
-          className="mt-6 bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-6 py-2 rounded-lg font-semibold transition"
-        >
-          {savingProfile ? "Mentés..." : "Profil mentése"}
-        </button>
+            <button
+              onClick={handleSaveProfile}
+              disabled={savingProfile}
+              className="mt-6 bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-6 py-2 rounded-lg font-semibold transition"
+            >
+              {savingProfile ? "Mentés..." : "Profil mentése"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
-  </div>
-)}
+  );
+})()}
         
         {/* NEW TOPIC POPUP */}
         {showNewTopicPopup && (
@@ -2351,6 +2716,86 @@ dmUsers.map((conv: any) => {
             </div>
         )}
 
+              {/* ===== NAGY PROFILE POPUP (MÁS FELHASZNÁLÓ) ===== */}
+      {viewedUser && (() => {
+  const joinedAt = viewedUser.joinedAt
+    ? new Date(viewedUser.joinedAt)
+    : null;
+
+  const daysAsMember = joinedAt
+    ? Math.max(
+        0,
+        Math.floor(
+          (Date.now() - joinedAt.getTime()) /
+            (1000 * 60 * 60 * 24)
+        )
+      )
+    : null;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
+          <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl p-6 w-full max-w-md animate-fade-in">
+
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold">
+                {viewedUser.username} profilja
+              </h3>
+              <button
+                onClick={() => setViewedUser(null)}
+                className="text-white/70 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex flex-col items-center gap-4 text-center">
+              <div className="w-24 h-24 rounded-full bg-black/40 overflow-hidden">
+                {viewedUser.avatarUrl ? (
+                  <img
+                    src={viewedUser.avatarUrl}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span className="text-3xl font-bold">
+                    {viewedUser.username[0].toUpperCase()}
+                  </span>
+                )}
+              </div>
+
+              <p className="text-lime-300 text-sm">
+                {viewedUser.role === "ADMIN"
+                  ? "Admin"
+                  : viewedUser.role === "MODERATOR"
+                  ? "Moderátor"
+                  : "Felhasználó"}
+              </p>
+
+<p className="text-xs text-white/60">
+  {daysAsMember !== null
+    ? `${daysAsMember} napja tag`
+    : "—"}
+</p>
+
+<p className="text-xs text-white/50 mt-1">
+  🕒 {formatLastActive(viewedUser.lastOnlineAt ?? null)}
+</p>
+
+              <button
+                onClick={() => {
+                  setActiveConversationId(viewedUser.id);
+                  setActivePage("dm");
+                  setViewedUser(null);
+                }}
+                className="mt-4 w-full bg-lime-500 hover:bg-lime-600 text-black rounded-lg py-2 font-semibold transition"
+              >
+                💬 Üzenet küldése
+              </button>
+            </div>
+          </div>
+        </div>
+            );
+    })()}
+      {/* ===== / NAGY PROFILE POPUP ===== */}
       </div>
     </div> 
   );

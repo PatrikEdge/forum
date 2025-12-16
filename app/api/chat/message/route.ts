@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
           username: true,
           avatarUrl: true,
           role: true,
+          joinedAt: true,
         },
       },
     },
@@ -164,6 +165,7 @@ export async function POST(req: NextRequest) {
           username: true,
           avatarUrl: true,
           role: true,
+          joinedAt: true,
         },
       },
     },
@@ -183,29 +185,37 @@ if (mentions.length > 0) {
 
   if (mentionedUsers.length > 0) {
     // 🧠 DB notification
-    await prisma.notification.createMany({
-      data: mentionedUsers.map((u) => ({
-        userId: u.id,
-        type: "MENTION",
-        title: "Megemlítés a chatben",
-        message: `@${user.username} megemlített a globális chatben`,
-      })),
-    });
+for (const u of mentionedUsers) {
+await prisma.notification.create({
+  data: {
+    userId: u.id,
+    type: "MENTION",
+    title: "Megemlítés a chatben",
+    message: `@${user.username} megemlített a globális chatben`,
+    meta: { chat: "global", messageId: msg.id },
+  },
+});
+}
 
     // 🔔 REALTIME WS PUSH (MENTION)
-    mentionedUsers.forEach((u) => {
-      wssBroadcast({
-        type: "notification",
-        userId: u.id,
-        notification: {
-          type: "MENTION",
-          title: "Megemlítés a chatben",
-          message: `@${user.username} megemlített a globális chatben`,
-          createdAt: new Date().toISOString(),
-          isRead: false,
-        },
-      });
-    });
+mentionedUsers.forEach((u) => {
+  wssBroadcast({
+    type: "notification",
+    userId: u.id,
+    notification: {
+      type: "MENTION",
+      title: "Megemlítés a chatben",
+      message: `@${user.username} megemlített a globális chatben`,
+      meta: {
+        chat: "global",
+        messageId: msg.id,
+      },
+      createdAt: new Date().toISOString(),
+      isRead: false,
+    },
+  });
+});
+
   }
 }
 

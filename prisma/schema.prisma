@@ -15,6 +15,7 @@
     avatarUrl     String?
     role          Role           @default(USER)
     joinedAt      DateTime       @default(now())
+    lastOnlineAt  DateTime?
     chatMessages  ChatMessage[]
     ChatReactions ChatReaction[]
     dmSent        DMMessage[]    @relation("DMFrom")
@@ -150,6 +151,7 @@
     type      String   @default("INFO")
     title     String
     message   String
+    meta      Json?
     createdAt DateTime @default(now())
     userId    String
     isRead    Boolean  @default(false)
