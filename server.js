@@ -1,7 +1,9 @@
+require("ts-node/register/transpile-only");
+require("dotenv").config({ path: ".env.local" });
+
 const { createServer } = require("http");
 const next = require("next");
 const { createWSServer } = require("./lib/wsServer");
-require("dotenv").config({ path: ".env.local" });
 
 const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });
@@ -15,7 +17,7 @@ app.prepare().then(() => {
   const wss = createWSServer(server);
 
   server.on("upgrade", (req, socket, head) => {
-    const pathname = req.url.split("?")[0];
+    const pathname = req.url?.split("?")[0];
 
     if (pathname === "/ws") {
       wss.handleUpgrade(req, socket, head, (ws) => {
@@ -27,7 +29,7 @@ app.prepare().then(() => {
   });
 
   const PORT = process.env.PORT || 3000;
-  server.listen(PORT, () =>
-    console.log("Server + WS running on http://localhost:" + PORT)
-  );
+  server.listen(PORT, () => {
+    console.log("Server + WS running on http://localhost:" + PORT);
+  });
 });

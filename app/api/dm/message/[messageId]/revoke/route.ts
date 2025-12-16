@@ -1,13 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
 import { NextRequest, NextResponse } from "next/server";
-import { wssBroadcast } from "@/lib/wsServer";
+import { wssBroadcast } from "@/lib/wsBroadcast";
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ messageId: string }> }
 ) {
-  // 🔥 NEXT.JS 14 FIX
   const { messageId } = await params;
 
   if (!messageId) {
@@ -42,6 +41,13 @@ export async function POST(
       editedAt: new Date(),
     },
   });
+
+  if (msg.conversationId) {
+    await prisma.dMConversation.update({
+      where: { id: msg.conversationId },
+      data: { lastMessageAt: new Date() },
+    });
+  }
 
   wssBroadcast({
     type: "dm_revoke",

@@ -1,17 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getUserFromRequest } from "@/lib/getUser";
+import { getSessionUserFromRequest } from "@/lib/getSessionUserFromRequest";
 
 export async function GET(req: NextRequest) {
-  const sessionUser = await getUserFromRequest(req);
+  const session = getSessionUserFromRequest(req);
 
-  if (!sessionUser) {
+  if (!session) {
     return NextResponse.json(null, { status: 401 });
   }
 
-  // 🔥 TELJES USER + STATOK
   const user = await prisma.user.findUnique({
-    where: { id: sessionUser.id },
+    where: { id: session.id },
     select: {
       id: true,
       username: true,
@@ -54,7 +53,6 @@ export async function GET(req: NextRequest) {
     role: user.role,
     joinedAt: user.joinedAt,
 
-    // 🔥 STATISZTIKÁK
     postsCount: user._count.posts,
     threadsCount: user._count.threads,
     likesReceived,

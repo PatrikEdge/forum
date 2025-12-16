@@ -253,31 +253,53 @@ function GlobalChat({ user, messages, setMessages }: {
   const [text, setText] = useState("");
   const [typingUser, setTypingUser] = useState<string | null>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [newMessageCount, setNewMessageCount] = useState(0);
+  const typingTimeout = useRef<NodeJS.Timeout | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   // ---- Edit ----
   const [editMessage, setEditMessage] = useState<any>(null);
   const [editText, setEditText] = useState("");
 
   const listRef = useRef<HTMLDivElement | null>(null);
+  const isAtBottomRef = useRef(true);
 
   useEffect(() => {
   const el = listRef.current;
   if (!el) return;
 
   function onScroll() {
-    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 10;
-    setShowScrollButton(!atBottom);
-  }
+  const atBottom =
+    el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+
+  isAtBottomRef.current = atBottom;
+  setShowScrollButton(!atBottom);
+}
 
   el.addEventListener("scroll", onScroll);
   return () => el.removeEventListener("scroll", onScroll);
 }, []);
 
+// ---------------- FIRST LOAD → SCROLL TO BOTTOM ----------------
+useEffect(() => {
+  const el = listRef.current;
+  if (!el) return;
+
+  requestAnimationFrame(() => {
+    el.scrollTop = el.scrollHeight;
+    isAtBottomRef.current = true;
+  });
+}, []);
+
   const REACTIONS = ["❤️", "😆", "👍", "😡", "😢", "😮"];
 
   // ---- Typing ----
-  function sendTyping() {
+function sendTyping() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  // ⛔ debounce
+  if (typingTimeout.current) return;
+
   ws.send(
     JSON.stringify({
       type: "typing",
@@ -286,16 +308,53 @@ function GlobalChat({ user, messages, setMessages }: {
       username: user.username,
     })
   );
+
+  typingTimeout.current = setTimeout(() => {
+    typingTimeout.current = null;
+  }, 2500);
 }
 
-  // ---- Reaction Toggle (JAVÍTVA: REST API-t használ) ----
-function toggleReaction(messageId, emoji) {
+function toggleReaction(messageId: string, emoji: string) {
+  // 🔥 1. Optimistic UI
+  setMessages((prev) =>
+    prev.map((m) => {
+      if (m.id !== messageId) return m;
+
+      const reactions = m.reactions ?? [];
+      const existing = reactions.find((r) => r.emoji === emoji);
+
+      if (existing) {
+        return {
+          ...m,
+          reactions: reactions.map((r) =>
+            r.emoji === emoji
+              ? {
+                  ...r,
+                  count: r.mine ? r.count - 1 : r.count + 1,
+                  mine: !r.mine,
+                }
+              : r
+          ),
+        };
+      }
+
+      return {
+        ...m,
+        reactions: [
+          ...reactions,
+          { emoji, count: 1, mine: true, users: [] },
+        ],
+      };
+    })
+  );
+
+  // 🔥 2. API call
   fetch("/api/chat/reaction", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messageId, emoji }),
   }).catch(() => {
-    alert("Hiba történt a reakció elküldésekor.");
+    console.error("Reaction failed – WS will resync");
   });
 }
 
@@ -311,8 +370,8 @@ function toggleReaction(messageId, emoji) {
   const newText = editText.trim();
 
   // 1. Local echo (maradhat)
-  setMessages((prev) =>
-    prev.map((m) =>
+  setMessages((prev: any []) =>
+    prev.map((m: any) =>
       m.id === messageId ? { ...m, text: newText, edited: true } : m
     )
   );
@@ -370,24 +429,37 @@ function toggleReaction(messageId, emoji) {
         const incomingMessage = data.message;
         
         // 🟢 Új üzenet - DEDUBBLIKÁCIÓS LOGIKA
-        if (data.type === "global_message") {
-          
-          setMessages((prev: any[]) => {
-            // Ellenőrizzük, hogy az üzenet a mi általunk küldött, Local Echo-t felváltó üzenet-e.
-            if (incomingMessage.tempId && user.id === incomingMessage.authorId) {
-                // Lecseréljük az ideiglenes üzenetet a végleges, adatbázisból származó üzenetre
-                return prev.map((m) =>
-                    m.id === incomingMessage.tempId 
-                        ? { ...incomingMessage, id: incomingMessage.id } // Lecseréljük
-                        : m
-                );
-            }
-            
-            // Ha ez egy másik felhasználó üzenete, vagy ha nincs tempId, egyszerűen hozzáadjuk.
-            return [...prev, incomingMessage];
-          });
-          return;
-        }
+if (data.type === "global_message") {
+  const incomingMessage = data.message;
+
+  const isOwnMessage = incomingMessage.authorId === user.id;
+  const isTempReplace = Boolean(incomingMessage.tempId);
+
+  // ✅ CSAK más felhasználó ÜZENETE számít
+  if (!isAtBottomRef.current && !isOwnMessage) {
+    setNewMessageCount(c => c + 1);
+  }
+
+  setMessages(prev => {
+    // saját tempId csere
+    if (isTempReplace && isOwnMessage) {
+      return prev.map(m =>
+        m.id === incomingMessage.tempId
+  ? { ...incomingMessage, status: "sent" }
+  : m
+      );
+    }
+
+    // deduplikáció védelem (BIZTONSÁG)
+    if (prev.some(m => m.id === incomingMessage.id)) {
+      return prev;
+    }
+
+    return [...prev, incomingMessage];
+  });
+
+  return;
+}
 
         // 👀 Valaki ír
         if (data.type === "typing" && data.chat === "global") {
@@ -412,7 +484,11 @@ function toggleReaction(messageId, emoji) {
         // ✏️ BEJÖVŐ SZERKESZTÉS
 if (data.type === "chat_edit") {
   setMessages((prev) =>
-    prev.map((m) => (m.id === data.message.id ? data.message : m))
+    prev.map((m) =>
+      m.id === data.message.id
+        ? { ...m, ...data.message, reactions: m.reactions }
+        : m
+    )
   );
   return;
 }
@@ -425,20 +501,29 @@ if (data.type === "chat_edit") {
     return () => ws.removeEventListener("message", onMessage);
   }, [ws, user.id, setMessages]); // user.id hozzáadva dependency-nek
 
-  // ---- Auto-scroll ----
-  useEffect(() => {
+// ---------------- AUTO SCROLL ON NEW MESSAGE ----------------
+useEffect(() => {
   const el = listRef.current;
   if (!el) return;
 
-  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
-
-  if (atBottom) {
+  if (isAtBottomRef.current) {
     el.scrollTo({
       top: el.scrollHeight,
       behavior: "smooth",
     });
+
+    // ✅ CSAK ekkor nullázzuk
+    setNewMessageCount(0);
   }
-}, [messages]);
+}, [messages.length]);
+
+function showToast(message: string) {
+  setToast(message);
+
+  setTimeout(() => {
+    setToast(null);
+  }, 3000);
+}
 
   // ---- SEND MESSAGE ----
 function handleSend() {
@@ -458,25 +543,67 @@ function handleSend() {
         createdAt: new Date().toISOString(),
         reactions: [],
         edited: false,
+        status: "sending",
       },
     ]);
 
     // 2. REST API HÍVÁS A PERZISZTENCIÁHOZ (adatbázisba mentés)
     // EZ A HÍVÁS INDÍTJA EL A SZERVEROLDALI MENTÉST ÉS BROADCASTOT!
     fetch("/api/chat/message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // Elküldjük a tempId-t a szervernek
-        body: JSON.stringify({ text: msg, tempId: tempId }), 
-    })
-    // NINCS TOVÁBBI WS.SEND() ITT! Csak a REST API hívás!
-    .catch(e => {
-        console.error("Chat message send error:", e);
-        // Hiba esetén eltávolítjuk a local echo üzenetet
-        setMessages((prev) => prev.filter(m => m.id !== tempId));
-        alert("Hiba történt az üzenet elküldésekor. Kérem, próbálja újra.");
-    });
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ text: msg, tempId }),
+})
+  .then(async (res) => {
+    if (res.status === 429) {
+      // 🟡 RATE LIMIT UI
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === tempId ? { ...m, status: "failed" } : m
+        )
+      );
+      showToast("Túl gyorsan írsz, várj pár másodpercet!");
+      throw new Error("Rate limited");
+    }
+
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+  })
+  .catch(() => {
+    // 🔴 OPTIMISTIC ROLLBACK – NEM TÖRLÜNK
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === tempId ? { ...m, status: "failed" } : m
+      )
+    );
+  });
 }
+
+function resendMessage(msg: any) {
+  // visszaállítjuk sending-re
+  setMessages((prev) =>
+    prev.map((m) =>
+      m.id === msg.id ? { ...m, status: "sending" } : m
+    )
+  );
+
+  fetch("/api/chat/message", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text: msg.text,
+      tempId: msg.id,
+    }),
+  }).catch(() => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === msg.id ? { ...m, status: "failed" } : m
+      )
+    );
+  });
+}
+
 
   return (
     <div className="relative flex flex-col h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 overflow-hidden">
@@ -532,6 +659,26 @@ function handleSend() {
 
               <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
 
+              {/* SEND STATUS */}
+{msg.status === "sending" && (
+  <div className="text-xs text-white/50 italic mt-1">
+    Küldés…
+  </div>
+)}
+
+{msg.status === "failed" && (
+  <div className="text-xs text-red-400 mt-1 flex gap-2 items-center">
+    Sikertelen küldés
+    <button
+      onClick={() => resendMessage(msg)}
+      className="underline hover:text-red-300"
+    >
+      Újraküldés
+    </button>
+  </div>
+)}
+
+
               {/* Edited Label */}
               {msg.edited && (
   <small
@@ -551,24 +698,21 @@ function handleSend() {
 
               {/* REACTIONS */}
               <div className="flex gap-1 mt-2">
-                {REACTIONS.map((emoji) => (
-                  <button
-  key={emoji}
-  onClick={() => {
-  if (String(msg.id).startsWith("temp-")) return; // vagy crypto id felismerése
-  toggleReaction(msg.id, emoji);
-}}
-
-  className={
-    "text-sm px-2 py-[1px] rounded-md transition " +
-    (msg.reactions?.some(r => r.emoji === emoji && r.mine)
-      ? "bg-lime-500/30 scale-110"
-      : "hover:bg-white/20")
-  }
->
-  {emoji}
-</button>
-                ))}
+{REACTIONS.map((emoji) => (
+  <button
+    key={emoji}
+    disabled={String(msg.id).startsWith("temp-")}
+    onClick={() => toggleReaction(msg.id, emoji)}
+    className={
+      "text-sm px-2 py-[1px] rounded-md transition disabled:opacity-40 disabled:cursor-not-allowed " +
+      (msg.reactions?.some((r) => r.emoji === emoji && r.mine)
+        ? "bg-lime-500/30 scale-110"
+        : "hover:bg-white/20")
+    }
+  >
+    {emoji}
+  </button>
+))}
               </div>
 
               {/* REACTION COUNT */}
@@ -603,17 +747,25 @@ function handleSend() {
 {showScrollButton && (
   <button
     onClick={() => {
-      if (listRef.current) {
-        listRef.current.scrollTo({
-  top: listRef.current.scrollHeight,
-  behavior: "smooth",
-});
-      }
+      const el = listRef.current;
+      if (!el) return;
+
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      isAtBottomRef.current = true;
+      setShowScrollButton(false);
+      setNewMessageCount(0);
     }}
-    className="absolute right-4 bottom-20 bg-lime-500 text-black px-3 py-1 rounded-lg shadow-lg hover:bg-lime-600 transition z-50"
+    className="absolute right-4 bottom-20 bg-lime-500 text-black px-3 py-1 rounded-lg shadow-lg"
   >
-    ↓ Ugrás az aljára
+    ↓ {newMessageCount > 0 ? `${newMessageCount} új üzenet` : "Ugrás az aljára"}
   </button>
+)}
+
+{/* TOAST */}
+{toast && (
+  <div className="absolute bottom-28 left-1/2 -translate-x-1/2 bg-black/80 text-white text-sm px-4 py-2 rounded-lg shadow-lg border border-white/20 z-50">
+    {toast}
+  </div>
 )}
 
 {/* INPUT BAR */}
@@ -740,17 +892,16 @@ export default function ForumUI() {
   // DM state
   const [dmUsers, setDMUsers] = useState<any[]>([]);
   const [dmMessages, setDMMessages] = useState<any[]>([]);
-  const [activeDM, setActiveDM] = useState<string | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [dmText, setDMText] = useState("");
   const [dmLoading, setDMLoading] = useState(false);
   const [searchUsers, setSearchUsers] = useState<any[]>([]);
   const [searchDMText, setSearchDMText] = useState("");
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [dmTypingUser, setDMTypingUser] = useState<string | null>(null);
-const [editingDM, setEditingDM] = useState<any | null>(null);
-const [editingDMText, setEditingDMText] = useState("");
+  const [editingDM, setEditingDM] = useState<any | null>(null);
+  const [editingDMText, setEditingDMText] = useState("");
   const dmListRef = useRef<HTMLDivElement | null>(null);
-  const isAtBottomRef = useRef(true);
 
   // 🔁 DM oldalra lépéskor mindig frissítjük a listát + badge-et
 useEffect(() => {
@@ -777,7 +928,7 @@ useEffect(() => {
 
   useEffect(() => {
   if (activePage !== "dm") return;
-  if (!activeDM) return;
+  if (!activeConversationId) return;
 
   // ⚠️ FONTOS: timeout + requestAnimationFrame
   const t = setTimeout(() => {
@@ -791,12 +942,15 @@ useEffect(() => {
   }, 0);
 
   return () => clearTimeout(t);
-}, [activePage, activeDM, dmMessages.length]);
+}, [activePage, activeConversationId, dmMessages.length]);
 
   
   function onScroll() {
-    isAtBottomRef.current =
-      el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+    const el = dmListRef.current;
+if (!el) return;
+
+isAtBottomRef.current =
+  el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
   }
 
   el.addEventListener("scroll", onScroll);
@@ -804,20 +958,18 @@ useEffect(() => {
 }, []);
 
 
-// 🔁 BETÖLTÉSKOR
 useEffect(() => {
-  const saved = localStorage.getItem("activeDM");
-  if (saved) setActiveDM(saved);
+  const saved = localStorage.getItem("activeConversationId");
+  if (saved) setActiveConversationId(saved);
 }, []);
 
-// 💾 VÁLTOZÁSKOR
 useEffect(() => {
-  if (activeDM) {
-    localStorage.setItem("activeDM", activeDM);
+  if (activeConversationId) {
+    localStorage.setItem("activeConversationId", activeConversationId);
   } else {
-    localStorage.removeItem("activeDM");
+    localStorage.removeItem("activeConversationId");
   }
-}, [activeDM]);
+}, [activeConversationId]);
 
   // Global Chat state
   const [chatMessages, setChatMessages] = useState<any[]>([]);
@@ -905,7 +1057,7 @@ setDMUsers(prev => {
               ...c,
               lastMessage: data.message,
               unreadCount:
-                activeDM === partnerId || data.message.fromId === user.id
+                activeConversationId === partnerId || data.message.fromId === user.id
                   ? 0
                   : c.unreadCount + 1,
             }
@@ -932,9 +1084,16 @@ setDMUsers(prev => {
 });
 
   // 🔥 Aktív beszélgetés esetén azonnal megjelenik
-  if (activeDM === partnerId) {
+  if (activeConversationId === partnerId) {
     setDMMessages(prev => [...prev, data.message]);
   }
+
+  // 🔔 NOTIFICATION (MENTION)
+if (data.type === "notification") {
+  setNotifications(prev => [data.notification, ...prev]);
+  setUnreadNotifications(prev => prev + 1);
+  return;
+}
 
   loadUnreadCounts();
 }
@@ -942,7 +1101,7 @@ setDMUsers(prev => {
 
         // --- DM typing ---
         if (data.type === "dm_typing") {
-          if (activeDM && data.fromId === activeDM) {
+          if (activeConversationId && data.fromId === activeConversationId) {
             setDMTypingUser(data.username ?? "Valaki");
             setTimeout(() => setDMTypingUser(null), 2500);
           }
@@ -999,7 +1158,7 @@ if (data.type === "dm_revoke") {
 
     ws.addEventListener("message", onMessage);
     return () => ws.removeEventListener("message", onMessage);
-  }, [ws, user?.id, activeDM]);
+  }, [ws, user?.id, activeConversationId]);
   
 
   // ------------------------- Fetchers -------------------------
@@ -1049,49 +1208,45 @@ if (data.type === "dm_revoke") {
     setDMLoading(false);
   };
 
-const loadConversation = async (partnerId: string) => {
-  try {
-    const res = await fetch(`/api/dm/messages/${partnerId}`);
-    if (res.ok) {
-      const data = await res.json();
-      setDMMessages(data.messages || []);
-    } else {
-      setDMMessages([]);
-    }
-  } catch {
-    setDMMessages([]);
-  }
+const loadConversation = async (conversationId: string) => {
+  const res = await fetch(
+    `/api/dm/conversations/${conversationId}/messages`
+  );
+  const data = await res.json();
+  setDMMessages(data.messages || []);
 };
 
+useEffect(() => {
+  if (!activeConversationId) return;
+  loadConversation(activeConversationId);
+}, [activeConversationId]);
 
 
 useEffect(() => {
-  if (!activeDM) return;
+  if (!activeConversationId) return;
 
-  loadConversation(activeDM);
+  loadConversation(activeConversationId);
 
   fetch("/api/dm/read", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ partnerId: activeDM }),
+    body: JSON.stringify({ partnerId: activeConversationId }),
   });
-}, [activeDM]);
+}, [activeConversationId]);
 
+const sendMessage = async () => {
+  if (!dmText.trim() || !activeConversationId) return;
 
-const sendMessage = () => {
-  if (!dmText || !activeDM) return;
-
-  const partnerId = activeDM; // 🔒 LEZÁRVA
-  const text = dmText.trim();
-  setDMText("");
-
-  fetch("/api/dm/send", {
+  await fetch("/api/dm/send", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ toId: partnerId, text }),
-  }).catch(() => {
-    alert("Hiba történt az üzenet elküldésekor.");
+    body: JSON.stringify({
+      conversationId: activeConversationId,
+      text: dmText,
+    }),
   });
+
+  setDMText("");
 };
 
 const revokeDM = async (messageId: string) => {
@@ -1653,7 +1808,7 @@ return (
         <button
           key={u.id}
           onClick={() => {
-  setActiveDM(u.id);
+  setActiveConversationId(u.id);
   setSearchDMText("");
   setSearchUsers([]);
 }}
@@ -1675,7 +1830,7 @@ return (
       return (
         <button
           key={u.id}
-          onClick={() => setActiveDM(u.id)}
+          onClick={() => activeConversationId(u.id)}
           className="w-full text-left justify-start text-white hover:bg-lime-400/20 px-3 py-2 rounded-lg transition flex items-center gap-2"
         >
           <User className="w-4 h-4" /> {u.username}
@@ -1693,13 +1848,13 @@ dmUsers.map((conv: any) => {
   const partner = conv.partner;
   if (!partner) return null;
 
-  const active = activeDM === partner.id;
+  const active = activeConversationId === partner.id;
   const unread = conv.unreadCount > 0;
 
   return (
     <button
       key={partner.id}
-      onClick={() => setActiveDM(partner.id)}
+      onClick={() => setActiveConversationId(conv.id)}
       className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2 ${
         active ? "bg-white/20" : "hover:bg-white/20"
       }`}
@@ -1726,7 +1881,7 @@ dmUsers.map((conv: any) => {
 
 {/* Message View */}
 <div className="flex-1 bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 flex flex-col h-full overflow-hidden">
-  {!activeDM ? (
+  {!activeConversationId ? (
     <div className="flex-1 flex items-center justify-center text-white/50">
       Válasszon egy felhasználót a beszélgetéshez.
     </div>
@@ -1735,7 +1890,7 @@ dmUsers.map((conv: any) => {
       {/* DM HEADER */}
       <div className="flex items-center justify-between border-b border-white/20 pb-3 mb-4">
         {(() => {
-          const partner = allUsers.find((u: any) => u.id === activeDM);
+          const partner = allUsers.find((u: any) => u.id === activeConversationId);
           return (
             <h3 className="text-xl font-bold">
               Beszélgetés: {partner?.username ?? "..."}
@@ -1745,7 +1900,7 @@ dmUsers.map((conv: any) => {
 
         <button
           onClick={() => {
-            setActiveDM(null);
+            setActiveConversationId(null);
             setDMMessages([]);
             setDMTypingUser(null);
           }}

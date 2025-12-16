@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { useUser } from "@/app/prodivers/UserProvider";
 
 const WSContext = createContext<WebSocket | null>(null);
 
@@ -15,9 +16,11 @@ type Props = {
 };
 
 export function WebSocketProvider({ children }: Props) {
+  const { user, loading } = useUser();
+
   const [ws, setWs] = useState<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryDelay = useRef<number>(1000); // ms – exponenciális backoff
+  const retryDelay = useRef<number>(1000);
 
   const clearReconnectTimer = () => {
     if (reconnectTimer.current) {
@@ -26,10 +29,31 @@ export function WebSocketProvider({ children }: Props) {
     }
   };
 
+  // 🔥 FULL RESYNC HELPER
+  const resyncGlobalChat = async () => {
+    try {
+      const res = await fetch("/api/chat/message", {
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+
+      const data = await res.json();
+
+      window.dispatchEvent(
+        new CustomEvent("chat_resync", {
+          detail: data.messages || [],
+        })
+      );
+    } catch (err) {
+      console.error("Chat resync failed:", err);
+    }
+  };
+
   const connect = () => {
+    if (!user) return;
+
     try {
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-      // ha kell auth token, ide tudsz tenni query paramot pl. ?token=...
       const url = `${protocol}://${window.location.host}/ws`;
 
       const socket = new WebSocket(url);
@@ -38,17 +62,21 @@ export function WebSocketProvider({ children }: Props) {
         console.log("✅ WebSocket connected");
         retryDelay.current = 1000;
         setWs(socket);
+
+        // 🔥 RESYNC ON CONNECT / RECONNECT
+        resyncGlobalChat();
       };
 
       socket.onclose = () => {
-        console.warn("⚠️ WebSocket closed, reconnecting...");
+        console.warn("⚠️ WebSocket closed");
         setWs(null);
+
+        if (!user) return;
         scheduleReconnect();
       };
 
       socket.onerror = (err) => {
         console.error("WebSocket error:", err);
-        // hiba esetén is zárjuk → onclose majd reconnectel
         socket.close();
       };
     } catch (err) {
@@ -58,7 +86,7 @@ export function WebSocketProvider({ children }: Props) {
   };
 
   const scheduleReconnect = () => {
-    if (reconnectTimer.current) return; // már várunk reconnectre
+    if (reconnectTimer.current || !user) return;
 
     reconnectTimer.current = setTimeout(() => {
       reconnectTimer.current = null;
@@ -68,17 +96,25 @@ export function WebSocketProvider({ children }: Props) {
   };
 
   useEffect(() => {
-    connect();
+    if (loading) return;
+
+    if (!user) {
+      clearReconnectTimer();
+      if (ws) {
+        ws.close();
+        setWs(null);
+      }
+      return;
+    }
+
+    if (!ws) {
+      connect();
+    }
 
     return () => {
       clearReconnectTimer();
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.close();
-      }
     };
-    // ⚠️ szándékosan NINCS ws a dependency-ben, különben reconnect loop
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user, loading]);
 
   return <WSContext.Provider value={ws}>{children}</WSContext.Provider>;
 }

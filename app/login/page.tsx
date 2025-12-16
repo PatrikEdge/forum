@@ -1,9 +1,11 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useUser } from "@/app/prodivers/UserProvider";
 
 export default function Login() {
   const router = useRouter();
+  const { refreshUser } = useUser();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +26,7 @@ export default function Login() {
   setLoading(false);
 
   if (!res.ok) return setError(data.error || "Hiba történt.");
-
+  await refreshUser();
   router.push("/");
 };
 

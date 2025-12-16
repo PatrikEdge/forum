@@ -1,24 +1,39 @@
-import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
-import { wssBroadcast } from "@/lib/wsServer"; // vagy ahonnan exportálod
+import { NextRequest, NextResponse } from "next/server";
+import { wssBroadcast } from "@/lib/wsBroadcast";
 
 export async function POST(req: NextRequest) {
   const user = await getUserFromRequest(req);
   if (!user) {
-    return NextResponse.json(
-      { error: "Nem vagy bejelentkezve" },
-      { status: 401 }
-    );
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { toId, text } = await req.json();
-  if (!toId || !text?.trim()) {
-    return NextResponse.json({ error: "Hiányzó mezők" }, { status: 400 });
+  const { conversationId, text } = await req.json();
+  if (!conversationId || !text?.trim()) {
+    return NextResponse.json({ error: "Missing fields" }, { status: 400 });
   }
 
-  const saved = await prisma.dMMessage.create({
+  const conversation = await prisma.dMConversation.findUnique({
+    where: { id: conversationId },
+  });
+
+  if (
+    !conversation ||
+    (conversation.user1Id !== user.id &&
+      conversation.user2Id !== user.id)
+  ) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const toId =
+    conversation.user1Id === user.id
+      ? conversation.user2Id
+      : conversation.user1Id;
+
+  const message = await prisma.dMMessage.create({
     data: {
+      conversationId,
       fromId: user.id,
       toId,
       text: text.trim(),
@@ -29,39 +44,15 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  const messagePayload = {
-  id: saved.id,
-  text: saved.text,
-  fromId: saved.fromId,
-  toId: saved.toId,
-  createdAt: saved.createdAt,
-  read: saved.readAt,
-  from: {
-    id: saved.from.id,
-    username: saved.from.username,
-    avatarUrl: saved.from.avatarUrl,
-  },
-  to: {
-    id: saved.to.id,
-    username: saved.to.username,
-    avatarUrl: saved.to.avatarUrl,
-  },
-};
-
-  // Értesítés DB-be
-  await prisma.notification.create({
-    data: {
-      type: "dm",
-      title: "Új privát üzenet",
-      message: `${saved.from.username} üzenetet küldött neked.`,
-      userId: toId,
-    },
+  await prisma.dMConversation.update({
+    where: { id: conversationId },
+    data: { lastMessageAt: new Date() },
   });
 
   wssBroadcast({
-  type: "dm_message",
-  message: messagePayload,
-});
+    type: "dm_message",
+    message,
+  });
 
-  return NextResponse.json({ message: messagePayload });
+  return NextResponse.json({ message });
 }

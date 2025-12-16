@@ -1,52 +1,67 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
-import { verifyPassword, generateToken } from "@/lib/auth";
+import { generateToken } from "@/lib/auth";
 import { rateLimit } from "@/lib/rateLimit";
+import { parseJsonBody } from "@/lib/validation/request";
+import { loginSchema } from "@/lib/validation/schemas";
 
-export async function POST(req: NextRequest) {
-  try {
-    const ip = req.headers.get("x-forwarded-for") || "unknown";
-    const key = `login_${ip}`;
-    const allowed = rateLimit(key, { windowMs: 5 * 60 * 1000, max: 5 });
+const isProd = process.env.NODE_ENV === "production";
 
-    if (!allowed) {
-      return NextResponse.json(
-        { error: "Túl sok próbálkozás. Próbáld újra később." },
-        { status: 429 }
-      );
-    }
-    console.log("JWT SECRET (API):", process.env.JWT_SECRET);
+export async function POST(req: Request) {
+  const ip =
+    req.headers.get("x-forwarded-for") ??
+    req.headers.get("x-real-ip") ??
+    "unknown";
 
-    const { email, password } = await req.json();
-    if (!email || !password) {
-      return NextResponse.json({ error: "Hiányzó mezők" }, { status: 400 });
-    }
-
-    const user = await prisma.user.findUnique({ where: { email } });
-
-    if (!user || !(await verifyPassword(password, user.password))) {
-      return NextResponse.json({ error: "Hibás belépési adatok" }, { status: 401 });
-    }
-
-    const token = generateToken({ id: user.id });
-    const res = NextResponse.json({
-  user: { id: user.id, username: user.username, email: user.email },
-  token,
-});
-
-    const isProd = process.env.NODE_ENV === "production";
-
-res.cookies.set("token", token, {
-  httpOnly: true,
-  secure: false,
-  sameSite: "lax",
-  path: "/",
-  maxAge: 60 * 60 * 24 * 7,
-});
-
-    return res;
-  } catch (e) {
-    console.error(e);
-    return NextResponse.json({ error: "Szerver hiba" }, { status: 500 });
+  if (!rateLimit(ip)) {
+    return NextResponse.json(
+      { error: "Túl sok próbálkozás." },
+      { status: 429 }
+    );
   }
+
+  const body = await parseJsonBody(req, loginSchema);
+  if (!body) {
+    return NextResponse.json({ error: "Érvénytelen adatok" }, { status: 400 });
+  }
+
+  const { email, password } = body;
+
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user) {
+    return NextResponse.json(
+      { error: "Hibás email vagy jelszó." },
+      { status: 401 }
+    );
+  }
+
+  const valid = await bcrypt.compare(password, user.password);
+  if (!valid) {
+    return NextResponse.json(
+      { error: "Hibás email vagy jelszó." },
+      { status: 401 }
+    );
+  }
+
+  const token = generateToken({ id: user.id, role: user.role });
+
+  const res = NextResponse.json({
+    user: {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+    },
+  });
+
+  res.cookies.set("token", token, {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: "strict",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 7,
+  });
+
+  return res;
 }
+

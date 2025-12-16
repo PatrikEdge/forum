@@ -29,6 +29,6 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     "**/*.mts"
-  ],
+, "server.js", "lib/wsServer.js", "lib/validation/schemas.js"  ],
   "exclude": ["node_modules"]
 }

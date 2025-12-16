@@ -1,13 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
 import { NextRequest, NextResponse } from "next/server";
-import { wssBroadcast } from "@/lib/wsServer";
+import { wssBroadcast } from "@/lib/wsBroadcast";
 
 export async function PUT(
   req: NextRequest,
   context: { params: Promise<{ messageId: string }> }
 ) {
-  // ✅ PARAMS HELYES KIBONTÁSA
   const { messageId } = await context.params;
 
   if (!messageId) {
@@ -36,7 +35,10 @@ export async function PUT(
   }
 
   if (msg.revoked) {
-    return NextResponse.json({ error: "Visszavont üzenet" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Visszavont üzenet" },
+      { status: 400 }
+    );
   }
 
   if (msg.editCount >= 3) {
@@ -59,7 +61,13 @@ export async function PUT(
     },
   });
 
-  // 🔥 WS broadcast
+  if (msg.conversationId) {
+    await prisma.dMConversation.update({
+      where: { id: msg.conversationId },
+      data: { lastMessageAt: new Date() },
+    });
+  }
+
   wssBroadcast({
     type: "dm_edit",
     message: updated,

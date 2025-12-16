@@ -12,20 +12,34 @@ export async function POST(req: NextRequest) {
   }
 
   const { id } = await req.json();
-
   if (!id) {
     return NextResponse.json({ error: "Missing id" }, { status: 400 });
   }
 
-  await prisma.notification.update({
-    where: {
-      id,
-      userId: user.id,
-    },
-    data: {
-      isRead: true,
-    },
-  });
+  try {
+    const result = await prisma.notification.updateMany({
+      where: {
+        id,
+        userId: user.id,
+      },
+      data: {
+        isRead: true,
+      },
+    });
 
-  return NextResponse.json({ ok: true });
+    if (result.count === 0) {
+      return NextResponse.json(
+        { error: "Notification not found" },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    console.error("Notification read error:", err);
+    return NextResponse.json(
+      { error: "Failed to mark notification as read" },
+      { status: 500 }
+    );
+  }
 }

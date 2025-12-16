@@ -1,9 +1,11 @@
-import { prisma } from "./prisma";
+import { prisma } from "@/lib/prisma";
+import { getSessionUserFromRequest } from "./getSessionUserFromRequest";
 import type { NextRequest } from "next/server";
 import type { IncomingMessage } from "http";
-import { getSessionUserFromRequest } from "@/lib/getSessionUserFromRequest";
 
-export async function getUserFromRequest(req: NextRequest | IncomingMessage) {
+export async function getUserFromRequest(
+  req: NextRequest | IncomingMessage
+) {
   const session = getSessionUserFromRequest(req);
   if (!session) return null;
 
