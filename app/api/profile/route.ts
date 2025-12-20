@@ -7,23 +7,39 @@ import { z } from "zod";
 export const runtime = "nodejs";
 
 // ---------------- VALIDATION SCHEMA ----------------
-const updateProfileSchema = z.object({
-  username: z
-    .string()
-    .min(3, "A felhasználónév túl rövid")
-    .max(30, "A felhasználónév túl hosszú")
-    .optional(),
-  email: z
-    .string()
-    .email("Érvénytelen email cím")
-    .max(255)
-    .optional(),
-  password: z
-    .string()
-    .min(8, "A jelszó legalább 8 karakter")
-    .max(128)
-    .optional(),
-});
+const emptyToUndefined = (v: unknown) =>
+  typeof v === "string" && v.trim() === "" ? undefined : v;
+
+const updateProfileSchema = z
+  .object({
+    username: z.preprocess(
+      emptyToUndefined,
+      z.string().min(3).max(30).optional()
+    ),
+
+    email: z.preprocess(
+      emptyToUndefined,
+      z.string().email().max(255).optional()
+    ),
+
+    password: z.preprocess(
+      emptyToUndefined,
+      z.string().min(8, "Az új jelszó legalább 8 karakter").max(128).optional()
+    ),
+
+    // 🔥 NINCS min() !!
+    currentPassword: z.preprocess(
+      emptyToUndefined,
+      z.string().optional()
+    ),
+  })
+  .refine(
+    (data) => !data.password || data.currentPassword,
+    {
+      message: "Jelszó módosításához meg kell adni a jelenlegi jelszót",
+      path: ["currentPassword"],
+    }
+  );
 
 export async function PUT(req: NextRequest) {
   // ---------------- AUTH ----------------
@@ -52,15 +68,42 @@ export async function PUT(req: NextRequest) {
     password?: string;
   } = {};
 
+  // ---------------- USERNAME ----------------
   if (body.username) {
     data.username = body.username.trim();
   }
 
+  // ---------------- EMAIL ----------------
   if (body.email) {
     data.email = body.email.trim().toLowerCase();
   }
 
+  // ---------------- PASSWORD CHANGE ----------------
   if (body.password) {
+    const dbUser = await prisma.user.findUnique({
+      where: { id: authUser.id },
+      select: { password: true },
+    });
+
+    if (!dbUser?.password) {
+      return NextResponse.json(
+        { error: "Felhasználó nem található" },
+        { status: 404 }
+      );
+    }
+
+    const isValid = await bcrypt.compare(
+      body.currentPassword!,
+      dbUser.password
+    );
+
+    if (!isValid) {
+      return NextResponse.json(
+        { error: "Hibás jelenlegi jelszó" },
+        { status: 401 }
+      );
+    }
+
     data.password = await bcrypt.hash(body.password, 10);
   }
 
@@ -90,7 +133,6 @@ export async function PUT(req: NextRequest) {
   } catch (err: any) {
     console.error("PROFILE UPDATE ERROR:", err);
 
-    // ---------------- UNIQUE CONSTRAINT ----------------
     if (err.code === "P2002") {
       const field = err.meta?.target?.[0];
       if (field === "email") {

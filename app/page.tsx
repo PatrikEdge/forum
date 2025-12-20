@@ -18,6 +18,7 @@ import {
 import { useRouter } from "next/navigation";
 import { useWebSocket } from "./prodivers/WebsocketProvider";
 import Cropper from "react-easy-crop";
+import { createPortal } from "react-dom";
 
 // --------- helper a cropolt képhez (canvas) ---------
 const createImage = (url: string): Promise<HTMLImageElement> =>
@@ -211,9 +212,63 @@ function Sidebar({ activePage, setActivePage, unreadNotifications, unreadDM }: a
 }
 
 // ------------------------- Topbar -------------------------
-function Topbar({ user }: any) {
+function Topbar({
+  user,
+  setViewedUser,
+  setActiveThread,
+  setActivePage,
+}: any) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [results, setResults] = useState<{ users: any[]; threads: any[] }>({
+    users: [],
+    threads: [],
+  });
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [inputRect, setInputRect] = useState<DOMRect | null>(null);
+
   const router = useRouter();
+
+  // 🔎 DEBOUNCED SEARCH
+  useEffect(() => {
+    if (searchQuery.trim().length < 2) {
+      setResults({ users: [], threads: [] });
+      setOpen(false);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    const timeout = setTimeout(async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(
+          `/api/search?q=${encodeURIComponent(searchQuery)}`,
+          { signal: controller.signal }
+        );
+
+        if (res.ok) {
+          setResults(await res.json());
+          setOpen(true);
+        }
+      } catch {
+        // abort ignore
+      } finally {
+        setLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      controller.abort();
+      clearTimeout(timeout);
+    };
+  }, [searchQuery]);
+
+  const filteredUsers = results.users.filter(
+    (u) => u.id !== user?.id
+  );
 
   const handleLogout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -221,44 +276,159 @@ function Topbar({ user }: any) {
   };
 
   return (
-    <div className="flex items-center justify-between bg-white/10 backdrop-blur-xl p-3 md:p-4 rounded-2xl border border-white/20 shadow-lg">
+    <div className="relative flex items-center justify-between bg-white/10 backdrop-blur-xl p-3 md:p-4 rounded-2xl border border-white/20 shadow-lg">
+      {/* ===== SEARCH INPUT ===== */}
       <div className="relative w-2/3 md:w-1/2">
         <input
+          ref={inputRef}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
+          onFocus={() => {
+            if (inputRef.current) {
+              setInputRect(inputRef.current.getBoundingClientRect());
+            }
+            if (searchQuery.length >= 2) {
+              setOpen(true);
+            }
+          }}
+          onBlur={() => {
+            setTimeout(() => setOpen(false), 150);
+          }}
           placeholder="Keresés..."
-          className="w-full pl-10 pr-4 py-2 bg-white/20 border border-white/30 rounded-lg text-white placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-lime-400"
+          className="w-full pl-10 pr-4 py-2 bg-white/20 border border-white/30 rounded-lg
+                     text-white placeholder:text-white/60
+                     focus:outline-none focus:ring-2 focus:ring-lime-400"
         />
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-white/70" />
       </div>
 
+      {/* ===== USER INFO ===== */}
       {user && (
         <div className="flex items-center gap-3 md:gap-4">
           <div className="bg-white/20 w-8 h-8 md:w-10 md:h-10 rounded-full overflow-hidden flex items-center justify-center">
             {user.avatarUrl ? (
-              <img src={user.avatarUrl} className="w-full h-full object-cover" alt="Avatar" />
+              <img src={user.avatarUrl} className="w-full h-full object-cover" />
             ) : (
               <span className="text-sm font-semibold">
-                {user?.username?.charAt(0)?.toUpperCase() ?? "?"}
+                {user.username.charAt(0).toUpperCase()}
               </span>
             )}
           </div>
-          <div className="text-xs md:text-sm text-right hidden md:block">
+
+          <div className="hidden md:block text-right text-sm">
             <p className="font-semibold">{user.username}</p>
-            <p className="text-lime-300 text-[11px] md:text-xs">
-              {user.role === "MODERATOR" ? "Moderátor" : user.role === "ADMIN" ? "Admin" : "Felhasználó"}
+            <p className="text-lime-300 text-xs">
+              {user.role === "ADMIN"
+                ? "Admin"
+                : user.role === "MODERATOR"
+                ? "Moderátor"
+                : "Felhasználó"}
             </p>
           </div>
 
           <button
             onClick={handleLogout}
             title="Kijelentkezés"
-            className="p-2 bg-red-500/80 hover:bg-red-600 text-black rounded-lg transition flex items-center"
+            className="p-2 bg-red-500/80 hover:bg-red-600 text-black rounded-lg transition"
           >
             <LogOut className="w-4 h-4" />
           </button>
         </div>
       )}
+
+      {/* ===== DROPDOWN (PORTAL, ROOT LEVEL) ===== */}
+      {open &&
+        inputRect &&
+        typeof window !== "undefined" &&
+        createPortal(
+          <div
+            className="fixed bg-black/90 border border-white/20 rounded-xl shadow-lg z-[9999]"
+            style={{
+              left: inputRect.left,
+              top: inputRect.bottom + 8,
+              width: inputRect.width,
+            }}
+          >
+            {loading && (
+              <div className="p-3 text-sm text-white/60 italic">
+                Keresés…
+              </div>
+            )}
+
+            {!loading &&
+              results.users.length === 0 &&
+              results.threads.length === 0 && (
+                <div className="p-3 text-sm text-white/60">
+                  Nincs találat
+                </div>
+              )}
+
+              {/* 🔥 CSAK SAJÁT FELHASZNÁLÓ */}
+  {!loading &&
+    results.users.length === 1 &&
+    results.users[0].id === user?.id && (
+      <div className="p-3 text-sm text-white/60">
+        Saját profilodra nem lehet keresni
+      </div>
+    )}
+
+            {filteredUsers.length > 0 && (
+              <div className="border-b border-white/10">
+                <p className="px-3 py-1 text-xs text-lime-300">
+                  Felhasználók
+                </p>
+                {filteredUsers.map((u) => (
+                  <button
+                    key={u.id}
+                    onClick={() => {
+                      setViewedUser(u);
+                      setSearchQuery("");
+                      setOpen(false);
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-sm text-white hover:bg-white/10 hover:text-line-300"
+                  >
+                    <div className="w-6 h-6 rounded-full bg-white/20 overflow-hidden">
+                      {u.avatarUrl && (
+                        <img
+                          src={u.avatarUrl}
+                          className="w-full h-full object-cover"
+                        />
+                      )}
+                    </div>
+                    {u.username}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {results.threads.length > 0 && (
+              <div>
+                <p className="px-3 py-1 text-xs text-lime-300">
+                  Témák
+                </p>
+                {results.threads.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => {
+                      setActiveThread(t);
+                      setActivePage("home");
+                      setSearchQuery("");
+                      setOpen(false);
+                    }}
+                    className="w-full px-3 py-2 text-sm text-left
+             text-white hover:bg-white/10 hover:text-lime-300"
+                  >
+                    <p className="font-semibold">{t.title}</p>
+                    <p className="text-xs text-white/60">
+                      {t.category?.name}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
@@ -474,17 +644,6 @@ function toggleReaction(messageId: string, emoji: string) {
         alert("Hiba történt a szerkesztés mentésekor: " + errorText);
         // ide akár betolhatsz egy rollback-et is, ha akarod
         return;
-      }
-
-      // 3. Sikeres mentés után opcionális WS broadcast
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: "chat_edit",
-            id: messageId,
-            text: newText,
-          })
-        );
       }
     })
     .catch((e) => {
@@ -1136,7 +1295,26 @@ export default function ForumUI() {
   const { user, loading, refreshUser } = useUser();
   const router = useRouter();
   const ws = useWebSocket();
+  const dmIsAtBottomRef = useRef(true);
 
+async function openConversationWithUser(partnerId: string) {
+  const res = await fetch("/api/dm/conversations/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ partnerId }),
+  });
+
+  if (!res.ok) {
+    console.error("Conversation start failed");
+    return;
+  }
+
+  const data = await res.json();
+
+setActiveConversationId(data.conversation.id);
+setActivePage("dm");
+await loadDMUsers(); // 🔥 KÖTELEZŐ
+}
   const [globalText, setGlobalText] = useState("");
   const [sending, setSending] = useState(false);
 
@@ -1189,6 +1367,9 @@ export default function ForumUI() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
 
   // DM state
   const [dmUsers, setDMUsers] = useState<any[]>([]);
@@ -1204,18 +1385,36 @@ export default function ForumUI() {
   const [editingDMText, setEditingDMText] = useState("");
   const dmListRef = useRef<HTMLDivElement | null>(null);
 
-  // 🔁 DM oldalra lépéskor mindig frissítjük a listát + badge-et
+  // 🔥 DM BETÖLTÉS BESZÉLGETÉS VÁLTÁSKOR
 useEffect(() => {
-  if (!user) return;
-  loadDMUsers();        // 🔥 mindig
-  loadUnreadCounts();  // 🔥 mindig
-}, [user]);
+  if (activePage !== "dm") return;
+  if (!activeConversationId) return;
+
+  // opcionális, de ajánlott
+  setDMMessages([]);
+
+  loadConversation(activeConversationId);
+
+  // ✅ 1) delivered (kézbesítve)
+  fetch("/api/dm/delivered", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversationId: activeConversationId }),
+  }).catch(() => {});
+
+  // olvasottra állítás
+  fetch("/api/dm/read", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversationId: activeConversationId }),
+  }).catch(() => {});
+}, [activePage, activeConversationId]);
 
 useEffect(() => {
   const el = dmListRef.current;
   if (!el) return;
 
-  if (isAtBottomRef.current) {
+  if (dmIsAtBottomRef.current) {
     el.scrollTo({
       top: el.scrollHeight,
       behavior: "smooth",
@@ -1223,46 +1422,30 @@ useEffect(() => {
   }
 }, [dmMessages]);
 
+// scroll listener
 useEffect(() => {
   const el = dmListRef.current;
   if (!el) return;
 
-  useEffect(() => {
-  if (activePage !== "dm") return;
-  if (!activeConversationId) return;
-
-  // ⚠️ FONTOS: timeout + requestAnimationFrame
-  const t = setTimeout(() => {
-    requestAnimationFrame(() => {
-      const el = dmListRef.current;
-      if (!el) return;
-
-      el.scrollTop = el.scrollHeight;
-      isAtBottomRef.current = true;
-    });
-  }, 0);
-
-  return () => clearTimeout(t);
-}, [activePage, activeConversationId, dmMessages.length]);
-
-  
   function onScroll() {
-    const el = dmListRef.current;
-if (!el) return;
-
-isAtBottomRef.current =
-  el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+    dmIsAtBottomRef.current =
+      el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
   }
 
   el.addEventListener("scroll", onScroll);
   return () => el.removeEventListener("scroll", onScroll);
 }, []);
 
-
+// auto scroll DM váltáskor
 useEffect(() => {
-  const saved = localStorage.getItem("activeConversationId");
-  if (saved) setActiveConversationId(saved);
-}, []);
+  if (activePage !== "dm") return;
+  if (!activeConversationId) return;
+
+  requestAnimationFrame(() => {
+    const el = dmListRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  });
+}, [activePage, activeConversationId, dmMessages.length]);
 
 useEffect(() => {
   if (activeConversationId) {
@@ -1340,55 +1523,65 @@ useEffect(() => {
           return;
         }
 
-        // --- DM érkezik ---
 if (data.type === "dm_message") {
-  const partnerId =
-    data.message.fromId === user.id
-      ? data.message.toId
-      : data.message.fromId;
+  const conversationId = data.message.conversationId;
 
-  // 🔥 Conversations lista frissítése
-setDMUsers(prev => {
-  const exists = prev.find(c => c.partner.id === partnerId);
+  // 🧠 Conversations lista frissítése (EZ MARAD)
+  setDMUsers(prev => {
+    const exists = prev.find(c => c.id === conversationId);
+    let updated;
 
-  const updated = exists
-    ? prev.map(c =>
-        c.partner.id === partnerId
+    if (exists) {
+      updated = prev.map(c =>
+        c.id === conversationId
           ? {
               ...c,
               lastMessage: data.message,
               unreadCount:
-                activeConversationId === partnerId || data.message.fromId === user.id
+                activeConversationId === conversationId ||
+                data.message.fromId === user.id
                   ? 0
                   : c.unreadCount + 1,
             }
           : c
-      )
-    : [
+      );
+    } else {
+      updated = [
         {
+          id: conversationId,
           partner:
             data.message.fromId === user.id
               ? data.message.to
               : data.message.from,
           lastMessage: data.message,
-          unreadCount: data.message.fromId === user.id ? 0 : 1,
+          unreadCount:
+            activeConversationId === conversationId ? 0 : 1,
         },
         ...prev,
       ];
+    }
 
-  // 🔥 RENDEZÉS – legfrissebb felül
-  return updated.sort(
-    (a, b) =>
-      new Date(b.lastMessage?.createdAt || 0).getTime() -
-      new Date(a.lastMessage?.createdAt || 0).getTime()
-  );
-});
+    return updated;
+  });
 
-  // 🔥 Aktív beszélgetés esetén azonnal megjelenik
-  if (activeConversationId === partnerId) {
-    setDMMessages(prev => [...prev, data.message]);
+  // 🧠 Aktív beszélgetés üzeneteinek frissítése (EZ MARAD)
+  if (activeConversationId === conversationId) {
+    setDMMessages(prev => {
+      if (prev.some(m => m.id === data.message.id)) return prev;
+      return [...prev, data.message];
+    });
   }
-  loadUnreadCounts();
+
+  // 🔥🔥🔥 EZ AZ ÚJ RÉSZ 🔥🔥🔥
+  // DM ICON BADGE REALTIME NÖVELÉS
+  if (
+    data.message.fromId !== user.id &&
+    activeConversationId !== conversationId
+  ) {
+    setUnreadDM(prev => prev + 1);
+  }
+
+  return;
 }
 
 // 🔔 GLOBAL NOTIFICATION (MENTION, SYSTEM, ETC.)
@@ -1400,28 +1593,49 @@ if (data.type === "notification") {
 
         // --- DM typing ---
         if (data.type === "dm_typing") {
-          if (activeConversationId && data.fromId === activeConversationId) {
-            setDMTypingUser(data.username ?? "Valaki");
-            setTimeout(() => setDMTypingUser(null), 2500);
-          }
-          return;
-        }
+  if (data.conversationId === activeConversationId) {
+    setDMTypingUser(data.username ?? "Valaki");
+    setTimeout(() => setDMTypingUser(null), 2500);
+  }
+  return;
+}
 
-        // --- DM read receipt ---
-        if (data.type === "dm_read") {
-          // partnerId = én, readerId = a másik
-          if (data.partnerId === user.id) {
-            setDMMessages((prev: any[]) =>
-              prev.map((m) =>
-                // az én üzeneteim lettek olvasva
-                m.fromId === user.id && m.toId === data.readerId
-                  ? { ...m, read: true }
-                  : m
-              )
-            );
-          }
-          return;
-        }
+if (data.type === "dm_delivered") {
+  if (data.conversationId !== activeConversationId) return;
+
+  setDMMessages(prev =>
+    prev.map(m =>
+      data.messageIds?.includes(m.id)
+        ? { ...m, deliveredAt: data.deliveredAt }
+        : m
+    )
+  );
+  return;
+}
+
+if (data.type === "dm_read") {
+  if (data.conversationId !== activeConversationId) return;
+
+  setDMMessages(prev =>
+    prev.map(m => {
+      if (m.fromId !== user.id) return m;   // csak a saját üzeneteim
+      if (m.readAt) return m;              // ne írjuk felül
+      return { ...m, readAt: data.readAt ?? new Date().toISOString() };
+    })
+  );
+
+  return;
+}
+
+if (data.type === "dm_reaction") {
+  setDMMessages(prev =>
+    prev.map(m =>
+      m.id === data.messageId
+        ? { ...m, reactions: data.reactions }
+        : m
+    )
+  );
+}
 
         // ✏️ DM EDIT
 if (data.type === "dm_edit") {
@@ -1493,45 +1707,47 @@ if (data.type === "dm_revoke") {
     }
   };
 
-  const loadDMUsers = async () => {
-    setDMLoading(true);
-    try {
-      const res = await fetch("/api/dm/conversations");
-      if (res.ok) {
-        const data = await res.json();
-        setDMUsers(data.conversations);
-      }
-    } catch (err) {
-      console.error("Failed to load DM users:", err);
+const loadDMUsers = async () => {
+  setDMLoading(true);
+  try {
+    const res = await fetch("/api/dm/conversations");
+    if (res.ok) {
+      const data = await res.json();
+      setDMUsers(data.conversations || []);
     }
+  } finally {
     setDMLoading(false);
-  };
-
-const loadConversation = async (conversationId: string) => {
-  const res = await fetch(
-    `/api/dm/conversations/${conversationId}/messages`
-  );
-  const data = await res.json();
-  setDMMessages(data.messages || []);
+  }
 };
 
-useEffect(() => {
-  if (!activeConversationId) return;
-  loadConversation(activeConversationId);
-}, [activeConversationId]);
+const loadConversation = async (conversationId: string) => {
+  try {
+    const res = await fetch(
+      `/api/dm/conversations/${conversationId}/messages`
+    );
+    if (!res.ok) return;
 
+    const data = await res.json();
+    if (!Array.isArray(data.messages)) return;
 
-useEffect(() => {
-  if (!activeConversationId) return;
+    setDMMessages(prev => {
+      const map = new Map<string, any>();
 
-  loadConversation(activeConversationId);
+      // 🔥 WS + REST összeolvasztás
+      [...prev, ...data.messages].forEach(m => {
+        map.set(m.id, m);
+      });
 
-  fetch("/api/dm/read", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ partnerId: activeConversationId }),
-  });
-}, [activeConversationId]);
+      return Array.from(map.values()).sort(
+        (a, b) =>
+          new Date(a.createdAt).getTime() -
+          new Date(b.createdAt).getTime()
+      );
+    });
+  } catch (e) {
+    console.error("loadConversation error", e);
+  }
+};
 
 const sendMessage = async () => {
   if (!dmText.trim() || !activeConversationId) return;
@@ -1697,6 +1913,21 @@ const loadUnreadCounts = async () => {
   loadDMUsers();
 }, [user]);
 
+useEffect(() => {
+  if (dmUsers.length === 0) return;
+
+  const saved = localStorage.getItem("activeConversationId");
+  if (!saved) return;
+
+  const exists = dmUsers.some(c => c.id === saved);
+  if (!exists) return;
+
+  // 🔥 MINDENT ITT CSINÁLUNK, NINCS RACE
+  setActiveConversationId(saved);
+  setActivePage("dm");
+  loadConversation(saved); // 🔥 EZ HIÁNYZOTT
+}, [dmUsers]);
+
   useEffect(() => {
     loadCategories();
   }, []);
@@ -1785,38 +2016,82 @@ const loadUnreadCounts = async () => {
 };
 
 
-  const handleSaveProfile = async () => {
-    if (!user) return;
-    setSavingProfile(true);
-    setProfileError(null);
-    setProfileSuccess(null);
+const handleSaveProfile = async () => {
+  if (!user) return;
 
-    try {
-      const res = await fetch("/api/profile", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: profileUsername,
-          email: profileEmail,
-          password: profilePassword || undefined,
-        }),
-      });
+  setSavingProfile(true);
+  setProfileError(null);
+  setProfileSuccess(null);
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Ismeretlen hiba történt.");
-      }
+  try {
+    const payload: any = {};
 
-      setProfilePassword("");
-      setProfileSuccess("Profil sikeresen mentve.");
-      await refreshUser();
-    } catch (err: any) {
-      console.error(err);
-      setProfileError(err.message || "Nem sikerült frissíteni a profilt.");
-    } finally {
-      setSavingProfile(false);
+    const username = profileUsername.trim();
+    const email = profileEmail.trim();
+    const password = profilePassword.trim();
+    const current = currentPassword.trim();
+
+    if (username && username !== user.username) {
+      payload.username = username;
     }
-  };
+
+    if (email && email !== user.email) {
+      payload.email = email;
+    }
+
+    if (password.length > 0) {
+  if (password.length < 8) {
+    setProfileError("Az új jelszó legalább 8 karakter kell legyen.");
+    setSavingProfile(false);
+    return;
+  }
+
+  if (!current) {
+    setProfileError("Jelszó módosításához add meg a jelenlegi jelszót.");
+    setSavingProfile(false);
+    return;
+  }
+
+  payload.password = password;
+  payload.currentPassword = current;
+}
+
+    // 🔥 KRITIKUS FIX – NINCS MIT KÜLDENI
+    if (Object.keys(payload).length === 0) {
+      setProfileError("Nincs módosítandó adat.");
+      return;
+    }
+
+    const res = await fetch("/api/profile", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || "Ismeretlen hiba");
+    }
+
+    const passwordChanged = Boolean(payload.password);
+
+    setProfilePassword("");
+    setCurrentPassword("");
+    setProfileSuccess("Profil sikeresen mentve.");
+    if (passwordChanged) {
+  // 🔐 biztonsági logout
+  await fetch("/api/auth/logout", { method: "POST" });
+  router.push("/login");
+  return;
+}
+    await refreshUser();
+  } catch (err: any) {
+    setProfileError(err.message || "Nem sikerült frissíteni a profilt.");
+  } finally {
+    setSavingProfile(false);
+  }
+};
 
   // avatar file input -> csak cropper nyitás
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1894,7 +2169,12 @@ return (
 
     {/* ================= MAIN CONTENT ================= */}
     <div className="flex-1 min-h-0 p-4 md:p-6 flex flex-col gap-6 overflow-hidden">
-      <Topbar user={user} />
+      <Topbar
+  user={user}
+  setViewedUser={setViewedUser}
+  setActiveThread={setActiveThread}
+  setActivePage={setActivePage}
+/>
 
       {/* ================= HOME ================= */}
       {activePage === "home" && (
@@ -2109,8 +2389,8 @@ return (
       {searchUsers.map((u: any) => (
         <button
           key={u.id}
-          onClick={() => {
-  setActiveConversationId(u.id);
+onClick={() => {
+  openConversationWithUser(u.id);
   setSearchDMText("");
   setSearchUsers([]);
 }}
@@ -2132,7 +2412,7 @@ return (
       return (
         <button
           key={u.id}
-          onClick={() => setActiveConversationId(u.id)}
+          onClick={() => openConversationWithUser(u.id)}
           className="w-full text-left justify-start text-white hover:bg-lime-400/20 px-3 py-2 rounded-lg transition flex items-center gap-2"
         >
           <User className="w-4 h-4" /> {u.username}
@@ -2150,12 +2430,12 @@ dmUsers.map((conv: any) => {
   const partner = conv.partner;
   if (!partner) return null;
 
-  const active = activeConversationId === partner.id;
+  const active = activeConversationId === conv.id;
   const unread = conv.unreadCount > 0;
 
   return (
     <button
-      key={partner.id}
+      key={conv.id}
       onClick={() => setActiveConversationId(conv.id)}
       className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2 ${
         active ? "bg-white/20" : "hover:bg-white/20"
@@ -2192,7 +2472,8 @@ dmUsers.map((conv: any) => {
       {/* DM HEADER */}
       <div className="flex items-center justify-between border-b border-white/20 pb-3 mb-4">
         {(() => {
-          const partner = allUsers.find((u: any) => u.id === activeConversationId);
+const conv = dmUsers.find(c => c.id === activeConversationId);
+const partner = conv?.partner;
           return (
             <h3 className="text-xl font-bold">
               Beszélgetés: {partner?.username ?? "..."}
@@ -2202,10 +2483,10 @@ dmUsers.map((conv: any) => {
 
         <button
           onClick={() => {
-            setActiveConversationId(null);
-            setDMMessages([]);
-            setDMTypingUser(null);
-          }}
+  setActiveConversationId(null);
+  setDMTypingUser(null);
+  localStorage.removeItem("activeConversationId");
+}}
           title="Bezárás"
           className="p-2 bg-red-500/80 hover:bg-red-600 text-black rounded-lg transition flex items-center"
         >
@@ -2261,99 +2542,213 @@ dmUsers.map((conv: any) => {
   ref={dmListRef}
   className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 mb-4"
 >
-  {dmMessages.map((msg: any) => {
-    const isMe = msg.fromId === user.id;
+  {/* 🔥 UTOLSÓ SAJÁT ÜZENET ID KISZÁMÍTÁSA (EGYSZER!) */}
+  {(() => {
+    let lastOwnMessageId: string | null = null;
 
-    return (
-      <div
-        key={msg.id}
-        className={`p-2 rounded-lg max-w-[80%] ${
-          isMe ? "self-end bg-lime-700/50" : "self-start bg-white/10"
-        }`}
-      >
-        {/* HEADER */}
-        <div className="flex items-center gap-2 mb-1">
-          <b className={isMe ? "text-lime-300" : ""}>
-            {isMe ? "Én" : msg.from?.username}
-          </b>
-          <small className="text-white/50">
-  {formatChatDate(msg.createdAt)}
-</small>
+    for (let i = dmMessages.length - 1; i >= 0; i--) {
+      const m = dmMessages[i];
+      if (m.fromId === user.id && !m.revoked) {
+        lastOwnMessageId = m.id;
+        break;
+      }
+    }
 
-        </div>
+    return dmMessages.map((msg: any) => {
+      const isMe = msg.fromId === user.id;
+      const isLastOwn = msg.id === lastOwnMessageId;
 
-        {/* TARTALOM */}
-        {msg.revoked ? (
-          <i className="text-white/50">Az üzenet visszavonva</i>
+      return (
+  <div
+    key={msg.id}
+    id={`dm-${msg.id}`}
+    className={`flex flex-col ${
+      isMe ? "items-end" : "items-start"
+    }`}
+  >
+    {/* 💬 MESSAGE BUBBLE */}
+    <div
+      className={`p-2 rounded-lg max-w-[80%] ${
+        isMe ? "bg-lime-700/50" : "bg-white/10"
+      }`}
+    >
+      {/* HEADER */}
+      <div className="flex items-center gap-2 mb-1">
+        <b className={isMe ? "text-lime-300" : ""}>
+          {isMe ? "Én" : msg.from?.username}
+        </b>
+        <small className="text-white/50">
+          {formatChatDate(msg.createdAt)}
+        </small>
+      </div>
+
+      {/* CONTENT */}
+      {msg.revoked ? (
+        <i className="text-white/50">Az üzenet visszavonva</i>
+      ) : (
+        <>
+          <div className="text-sm whitespace-pre-wrap">
+            {msg.text}
+          </div>
+
+          {msg.editCount > 0 && (
+            <div className="text-[10px] text-white/40 mt-1">
+              (szerkesztve)
+            </div>
+          )}
+        </>
+      )}
+    </div>
+
+    {/* ✅ STÁTUSZ – BUBORÉK ALATT */}
+    {isMe && isLastOwn && !msg.revoked && (
+      <div className="mt-1 text-[10px] text-white/50 flex items-center gap-1 pr-1">
+        {msg.readAt ? (
+          <>
+            <span className="text-lime-400">✔✔</span>
+            <span>
+              Látta{" "}
+              {new Date(msg.readAt).toLocaleTimeString("hu-HU", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </span>
+          </>
         ) : (
           <>
-            <div className="text-sm whitespace-pre-wrap">{msg.text}</div>
-
-            {msg.editCount > 0 && (
-              <div
-                className="text-[10px] text-white/40 mt-1"
-                title={`Szerkesztve: ${new Date(msg.editedAt).toLocaleString("hu-HU")}`}
-              >
-                (szerkesztve)
-              </div>
-            )}
+            <span>✔</span>
+            <span>Elküldve</span>
           </>
         )}
-
-        {/* ACTIONS */}
-        {isMe && !msg.revoked && (
-          <div className="flex gap-1 mt-1 opacity-70 hover:opacity-100 transition">
-            {(msg.editCount ?? 0) < 3 && (
-              <button
-                onClick={() => {
-                  setEditingDM(msg);
-                  setEditingDMText(msg.text ?? "");
-                }}
-                title={`Szerkesztés (${msg.editCount}/3)`}
-                className="p-1 rounded hover:bg-white/20 text-blue-300"
-              >
-                ✏️
-              </button>
-            )}
-
-            <button
-              onClick={() => revokeDM(msg.id)}
-              title="Üzenet visszavonása"
-              className="p-1 rounded hover:bg-red-500/20 text-red-400"
-            >
-              🗑️
-            </button>
-          </div>
-        )}
       </div>
-    );
-  })}
-</div>   {/* 🔥 EZ HIÁNYZOTT */}
+    )}
 
+{/* ACTIONS – saját üzenet */}
+{isMe && !msg.revoked && (
+  <div className="flex gap-2 mt-1 text-xs text-white/40 pr-1">
+    {(msg.editCount ?? 0) < 3 && (
+      <button
+        onClick={() => {
+          setEditingDM(msg);
+          setEditingDMText(msg.text ?? "");
+        }}
+        className="hover:text-blue-300 transition"
+        title="Szerkesztés"
+      >
+        ✏️
+      </button>
+    )}
+
+    <button
+      onClick={() => revokeDM(msg.id)}
+      className="hover:text-red-400 transition"
+      title="Törlés"
+    >
+      🗑️
+    </button>
+  </div>
+)}
+
+{/* 👍 REAKCIÓ GOMBOK – CSAK MÁS ÜZENETÉN (STABIL + VISSZAJELZÉS) */}
+{!msg.revoked && !isMe && (() => {
+  const emojis = ["❤️", "😆", "👍", "😮", "😢", "😡"];
+
+  return (
+    <div className="relative mt-2">
+      <div className="flex items-center gap-1 group">
+        {emojis.map((emoji, index) => {
+          const mine = msg.reactions?.some(
+            (r: any) => r.emoji === emoji && r.userId === user.id
+          );
+
+          const isFirst = index === 0;
+
+          return (
+            <button
+              key={emoji}
+              onClick={() =>
+                fetch("/api/dm/reaction", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    messageId: msg.id,
+                    emoji,
+                  }),
+                })
+              }
+              className={`
+                px-2 py-[1px] rounded-full text-sm border whitespace-nowrap transition
+                ${mine
+                  ? "bg-lime-500/40 border-lime-300"
+                  : "bg-white/10 border-white/20 hover:bg-white/20"}
+                ${
+                  isFirst
+                    ? "z-10"
+                    : "opacity-0 max-w-0 overflow-hidden pointer-events-none"
+                }
+                group-hover:opacity-100
+                group-hover:max-w-[80px]
+                group-hover:pointer-events-auto
+              `}
+            >
+              {emoji}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+})()}
+
+{/* 😀 KAPOTT REAKCIÓK – SAJÁT ÜZENET ALATT */}
+{isMe && msg.reactions?.length > 0 && (
+  <div className="flex gap-1 mt-1 text-xs">
+    {Object.entries(
+      msg.reactions.reduce((acc: any, r: any) => {
+        // 🔥 csak MÁS felhasználó reakciója
+        if (r.userId === user.id) return acc;
+
+        acc[r.emoji] = (acc[r.emoji] || 0) + 1;
+        return acc;
+      }, {})
+    ).map(([emoji, count]) => (
+      <span
+        key={emoji}
+        className="px-2 py-[1px] rounded-full bg-black/30 border border-white/20"
+      >
+        {emoji} {count}
+      </span>
+    ))}
+  </div>
+)}
+  </div>
+);
+    });
+  })()}
+</div>
 
 {/* DM INPUT */}
 <div className="flex gap-2 shrink-0">
-
-        <input
-          value={dmText}
-          onChange={(e) => setDMText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              sendMessage();
-            }
-          }}
-          placeholder="Írj privát üzenetet..."
-          className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
-        />
-        <button
-          onClick={sendMessage}
-          disabled={!dmText.trim()}
-          className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition flex items-center gap-2"
-        >
-          <Send className="w-4 h-4" /> Küldés
-        </button>
-      </div>
+  <input
+    value={dmText}
+    onChange={(e) => setDMText(e.target.value)}
+    onKeyDown={(e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        sendMessage();
+      }
+    }}
+    placeholder="Írj privát üzenetet..."
+    className="flex-1 bg-white/20 text-white placeholder:text-white/60 rounded-lg px-4 py-2 border border-white/20 focus:outline-none focus:ring-2 focus:ring-lime-400"
+  />
+  <button
+    onClick={sendMessage}
+    disabled={!dmText.trim()}
+    className="bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-4 py-2 rounded-lg font-semibold transition flex items-center gap-2"
+  >
+    <Send className="w-4 h-4" /> Küldés
+  </button>
+</div>
     </div>
   )}
 </div>
@@ -2384,26 +2779,34 @@ dmUsers.map((conv: any) => {
                         {notifications.map((n: any) => (
                             <div
   key={n.id}
-  onClick={() => {
-    if (n.meta?.chat === "global" && n.meta?.messageId) {
-      // 1️⃣ átváltás global chatre
-      setActivePage("chat");
+  onClick={async () => {
+  // 🔔 GLOBAL CHAT notification (marad)
+  if (n.meta?.chat === "global" && n.meta?.messageId) {
+    setActivePage("chat");
 
-      // 2️⃣ késleltetett esemény (chat már mountoljon!)
-      setTimeout(() => {
-        window.dispatchEvent(
-          new CustomEvent("jump_to_message", {
-            detail: {
-              messageId: n.meta.messageId,
-            },
-          })
-        );
-      }, 300);
-    }
+    setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("jump_to_message", {
+          detail: { messageId: n.meta.messageId },
+        })
+      );
+    }, 300);
+  }
 
-    // 3️⃣ olvasottra állítás
-    markNotificationRead(n.id);
-  }}
+  // 💬 DM notification
+  if (n.type === "DM" && n.meta?.conversationId) {
+    setActivePage("dm");
+
+    // 🔥 FONTOS: várjuk meg, hogy a DM oldal mountoljon
+    setTimeout(() => {
+      setActiveConversationId(n.meta.conversationId);
+    }, 100);
+  }
+
+  // ✅ olvasottra állítás
+  markNotificationRead(n.id);
+}}
+
   className={`cursor-pointer p-3 rounded-lg border transition ${
     n.isRead
       ? "bg-white/5 border-white/10"
@@ -2449,12 +2852,12 @@ dmUsers.map((conv: any) => {
     : null;
 
   const daysAsMember =
-  profileUser?.joinedAt
-    ? Math.floor(
-        (Date.now() - new Date(profileUser.joinedAt).getTime()) /
-          86_400_000
-      )
-    : null;
+    profileUser?.joinedAt
+      ? Math.floor(
+          (Date.now() - new Date(profileUser.joinedAt).getTime()) /
+            86_400_000
+        )
+      : null;
 
   return (
     <div className="h-full bg-white/10 backdrop-blur-xl rounded-2xl border border-white/20 p-4 md:p-6 overflow-y-auto">
@@ -2474,13 +2877,10 @@ dmUsers.map((conv: any) => {
         </div>
       )}
 
-      {/* GRID */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-6xl mx-auto">
 
-        {/* ========== LEFT COLUMN ========== */}
+        {/* LEFT */}
         <div className="lg:col-span-1 flex flex-col gap-6">
-
-          {/* Profile card */}
           <div className="bg-white/5 rounded-xl p-6 border border-white/10">
             <div className="flex flex-col items-center text-center gap-4">
               <div className="relative w-28 h-28 rounded-full bg-black/50 overflow-hidden border-4 border-lime-400/50">
@@ -2496,7 +2896,6 @@ dmUsers.map((conv: any) => {
                   </span>
                 )}
 
-                {/* Avatar csere CSAK saját profilnál */}
                 {isOwnProfile && (
                   <input
                     type="file"
@@ -2524,12 +2923,10 @@ dmUsers.map((conv: any) => {
                 </p>
               </div>
 
-              {/* 🔥 ÜZENET GOMB – csak más profilnál */}
               {!isOwnProfile && (
                 <button
                   onClick={() => {
-                    setActiveConversationId(profileUser.id);
-                    setActivePage("dm");
+                    openConversationWithUser(profileUser.id);
                     setViewedUser(null);
                   }}
                   className="mt-4 w-full bg-lime-500 hover:bg-lime-600 text-black rounded-lg py-2 font-semibold transition"
@@ -2540,53 +2937,81 @@ dmUsers.map((conv: any) => {
             </div>
           </div>
 
-          {/* Stats */}
           <ProfileStatsCard user={profileUser} />
         </div>
 
-        {/* ========== RIGHT COLUMN – CSAK SAJÁT PROFIL ========== */}
+        {/* RIGHT – SAJÁT PROFIL */}
         {isOwnProfile && (
           <div className="lg:col-span-2 bg-white/5 rounded-xl p-6 border border-white/10">
             <h3 className="text-xl font-bold mb-4">Profil adatok</h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <label className="block">
+              <label>
                 <span className="text-white/70">Felhasználónév</span>
                 <input
-                  type="text"
                   value={profileUsername}
                   onChange={(e) => setProfileUsername(e.target.value)}
-                  className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
+                  className="w-full bg-white/10 p-3 rounded-lg mt-1"
                 />
               </label>
 
-              <label className="block">
+              <label>
                 <span className="text-white/70">Email cím</span>
                 <input
-                  type="email"
                   value={profileEmail}
                   onChange={(e) => setProfileEmail(e.target.value)}
-                  className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
+                  className="w-full bg-white/10 p-3 rounded-lg mt-1"
                 />
               </label>
 
-              <label className="block md:col-span-2">
-                <span className="text-white/70">
-                  Új jelszó (hagyja üresen)
-                </span>
-                <input
-                  type="password"
-                  value={profilePassword}
-                  onChange={(e) => setProfilePassword(e.target.value)}
-                  className="w-full bg-white/10 p-3 rounded-lg mt-1 text-white focus:outline-none focus:ring-2 focus:ring-lime-400"
-                />
-              </label>
+              <label className="md:col-span-2 relative">
+  <span className="text-white/70">
+    Jelenlegi jelszó (csak jelszóváltáshoz)
+  </span>
+
+  <input
+    type={showCurrentPassword ? "text" : "password"}
+    value={currentPassword}
+    onChange={(e) => setCurrentPassword(e.target.value)}
+    className="w-full bg-white/10 p-3 rounded-lg mt-1 pr-12"
+  />
+
+  <button
+    type="button"
+    onClick={() => setShowCurrentPassword(v => !v)}
+    className="absolute right-3 top-[38px] text-xs text-lime-300 hover:text-lime-200"
+  >
+    {showCurrentPassword ? "🙈" : "👁"}
+  </button>
+</label>
+
+              <label className="md:col-span-2 relative">
+  <span className="text-white/70">
+    Új jelszó (csak ha változtatni szeretnél)
+  </span>
+
+  <input
+    type={showNewPassword ? "text" : "password"}
+    value={profilePassword}
+    onChange={(e) => setProfilePassword(e.target.value)}
+    className="w-full bg-white/10 p-3 rounded-lg mt-1 pr-12"
+  />
+
+  <button
+    type="button"
+    onClick={() => setShowNewPassword(v => !v)}
+    className="absolute right-3 top-[38px] text-xs text-lime-300 hover:text-lime-200"
+  >
+    {showNewPassword ? "🙈" : "👁"}
+  </button>
+</label>
+
             </div>
 
             <button
               onClick={handleSaveProfile}
               disabled={savingProfile}
-              className="mt-6 bg-lime-500 hover:bg-lime-600 disabled:bg-white/20 disabled:text-white/40 text-black px-6 py-2 rounded-lg font-semibold transition"
+              className="mt-6 bg-lime-500 hover:bg-lime-600 text-black px-6 py-2 rounded-lg font-semibold"
             >
               {savingProfile ? "Mentés..." : "Profil mentése"}
             </button>
@@ -2782,8 +3207,7 @@ dmUsers.map((conv: any) => {
 
               <button
                 onClick={() => {
-                  setActiveConversationId(viewedUser.id);
-                  setActivePage("dm");
+openConversationWithUser(viewedUser.id);
                   setViewedUser(null);
                 }}
                 className="mt-4 w-full bg-lime-500 hover:bg-lime-600 text-black rounded-lg py-2 font-semibold transition"

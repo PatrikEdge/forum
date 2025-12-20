@@ -7,10 +7,7 @@ import { wssBroadcast } from "@/lib/wsBroadcast";
 
 const MAX_LENGTH = 2000;
 
-export async function PUT(
-  req: NextRequest,
-  context: { params: { messageId: string } }
-) {
+export async function PUT(req: NextRequest) {
   // ================= AUTH =================
   const user = await getUserFromRequest(req);
   if (!user) {
@@ -20,8 +17,12 @@ export async function PUT(
     );
   }
 
-  const { messageId } = context.params;
-  if (!messageId) {
+  // ✅ FIX: messageId kinyerése URL-ből
+  const url = new URL(req.url);
+  const parts = url.pathname.split("/");
+  const messageId = parts[parts.length - 1];
+
+  if (!messageId || messageId === "message") {
     return NextResponse.json(
       { error: "Hiányzó üzenet ID" },
       { status: 400 }
@@ -39,37 +40,28 @@ export async function PUT(
     );
   }
 
-  let { text } = body;
-  if (typeof text !== "string") {
+  const { text } = body;
+  if (typeof text !== "string" || !text.trim()) {
     return NextResponse.json(
-      { error: "Hiányzó szöveg" },
+      { error: "Hiányzó vagy üres szöveg" },
       { status: 400 }
     );
   }
 
-  text = text.trim();
-  if (!text) {
+  const trimmed = text.trim();
+  if (trimmed.length > 2000) {
     return NextResponse.json(
-      { error: "Üres üzenet nem menthető" },
-      { status: 400 }
-    );
-  }
-
-  if (text.length > MAX_LENGTH) {
-    return NextResponse.json(
-      { error: `Max ${MAX_LENGTH} karakter engedélyezett` },
+      { error: "Max 2000 karakter engedélyezett" },
       { status: 400 }
     );
   }
 
   // ================= FIND MESSAGE =================
-  // 1️⃣ próbáljuk DM-ként
   const dm = await prisma.dMMessage.findUnique({
     where: { id: messageId },
     include: { from: true, to: true },
   });
 
-  // 2️⃣ ha nem DM, próbáljuk globálként
   const global = !dm
     ? await prisma.chatMessage.findUnique({
         where: { id: messageId },
@@ -87,7 +79,7 @@ export async function PUT(
   const isDM = Boolean(dm);
   const ownerId = isDM ? dm!.fromId : global!.authorId;
 
-  // ================= AUTHORIZATION =================
+  // ================= AUTH =================
   if (ownerId !== user.id) {
     if (user.role !== "ADMIN" && user.role !== "MODERATOR") {
       return NextResponse.json(
@@ -98,30 +90,26 @@ export async function PUT(
   }
 
   // ================= UPDATE =================
-  let updated;
+  const updated = isDM
+    ? await prisma.dMMessage.update({
+        where: { id: messageId },
+        data: {
+          text: trimmed,
+          editCount: { increment: 1 },
+          editedAt: new Date(),
+        },
+        include: { from: true, to: true },
+      })
+    : await prisma.chatMessage.update({
+        where: { id: messageId },
+        data: {
+          text: trimmed,
+          edited: true,
+        },
+        include: { author: true },
+      });
 
-  if (isDM) {
-    updated = await prisma.dMMessage.update({
-      where: { id: messageId },
-      data: {
-        text,
-        editCount: { increment: 1 },
-        editedAt: new Date(),
-      },
-      include: { from: true, to: true },
-    });
-  } else {
-    updated = await prisma.chatMessage.update({
-      where: { id: messageId },
-      data: {
-        text,
-        edited: true,
-      },
-      include: { author: true },
-    });
-  }
-
-  // ================= WS BROADCAST =================
+  // ================= WS =================
   wssBroadcast({
     type: isDM ? "dm_edit" : "chat_edit",
     message: updated,

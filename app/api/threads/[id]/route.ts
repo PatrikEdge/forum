@@ -4,11 +4,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromRequest } from "@/lib/getUser";
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  const { id } = params;
+export async function GET(req: NextRequest) {
+  const pathname = req.nextUrl.pathname;
+  const id = pathname.split("/").pop();
 
   if (!id) {
     return NextResponse.json(

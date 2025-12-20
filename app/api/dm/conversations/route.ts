@@ -20,7 +20,9 @@ export async function GET(req: NextRequest) {
         take: 1,
       },
     },
-    orderBy: { lastMessageAt: "desc" },
+    orderBy: {
+      lastMessageAt: "desc", // NULL-ok a végére mennek
+    },
   });
 
   const result = await Promise.all(

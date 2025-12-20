@@ -20,6 +20,7 @@
     ChatReactions ChatReaction[]
     dmSent        DMMessage[]    @relation("DMFrom")
     dmReceived    DMMessage[]    @relation("DMTo")
+    dmReactions   DMReaction[]
     likes         Like[]
     notifications Notification[]
     posts         Post[]
@@ -120,6 +121,7 @@
     editedAt  DateTime?
     revoked   Boolean  @default(false)
     readAt    DateTime?
+    deliveredAt    DateTime?
     editCount Int      @default(0)
     fromId    String
     toId      String
@@ -127,6 +129,8 @@
     from      User     @relation("DMFrom", fields: [fromId], references: [id], onDelete: Cascade)
     to        User     @relation("DMTo", fields: [toId], references: [id], onDelete: Cascade)
     conversation DMConversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+    reactions DMReaction[]
 
     @@index([conversationId])
     @@index([createdAt])
@@ -137,7 +141,7 @@
     id         String      @id @default(cuid())
     user1Id    String
     user2Id    String
-    lastMessageAt DateTime @default(now())
+    lastMessageAt DateTime?
     messages   DMMessage[]
     user1      User @relation("DMUser1", fields: [user1Id], references: [id], onDelete: Cascade)
     user2      User @relation("DMUser2", fields: [user2Id], references: [id], onDelete: Cascade)
@@ -145,6 +149,21 @@
     @@unique([user1Id, user2Id])
     @@index([lastMessageAt])
   }
+
+  model DMReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message   DMMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+}
+
 
   model Notification {
     id        String   @id @default(cuid())
